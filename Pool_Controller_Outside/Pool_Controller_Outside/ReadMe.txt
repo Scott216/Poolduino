@@ -94,7 +94,7 @@
  DIN Rail enclosure for CT Amp circuit: OKW B6700120
  
  
- ==RTC==
+ == RTC ==
  DS1307 chip
  RTC Tutorial http://www.ladyada.net/learn/breakoutplus/ds1307rtc.html
  To set time, un-comment line in setup(), upload sketch, then comment line out and upload agian.
@@ -124,7 +124,7 @@
  1              Red - Red      12 VDC
  2              Blk - Blk      Common
  3              Yel - Yel      Output (1-5 v)
- 4              Wht - Grn     Case ground (not connected)
+ 4              Wht - Grn      Case ground (not connected)
  
  
  Post-Filter Pressure

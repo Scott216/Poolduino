@@ -4,12 +4,12 @@
 
 #include <Wire.h>       // http://www.arduino.cc/en/Reference/Wire
 #include <RTClib.h>     // http://github.com/adafruit/RTClib
-#include <max6675.h>    // Thermocouple Amplifier Library http://github.com/adafruit/MAX6675-library
+//#include <max6675.h>    // Thermocouple Amplifier Library http://github.com/adafruit/MAX6675-library
 #include <XBee.h>       //http://code.google.com/p/xbee-arduino/     Modified per http://arduino.cc/forum/index.php/topic,111354.0.html
 // #include <SoftwareSerial.h>
 #include <Button.h>     // For pushbutton http://github.com/carlynorama/Arduino-Library-Button
-#include <OneWire.h>
-#include <DallasTemperature.h>
+#include <OneWire.h>    // http://www.pjrc.com/teensy/td_libs_OneWire.html  http://playground.arduino.cc/Learning/OneWire
+#include <DallasTemperature.h> // http://milesburton.com/index.php?title=Dallas_Temperature_Control_Library
 
 #define PRINT_DEBUG                   // Comment out when done debugging
 
@@ -77,16 +77,15 @@ RTC_DS1307 RTC;
 #define addrSlaveI2C    21  // I2C Slave address of RX panStamp
 #define I2C_PACKET_SIZE  7  // I2C Packet size
 
-// Inititialize the MAX6675 thermocouple library
-MAX6675 TempPumpHousing(TC_AMP_CLK, TC_AMP_CS_P,  TC_AMP_DO);
 
 // Initialize OneWire temp sensors
 OneWire oneWire(ONE_WIRE_BUS); 
 DallasTemperature waterTempSensors(&oneWire);
-static uint8_t tempSensors[2][8] =
+static uint8_t tempSensors[3][8] =
 {
   { 0x10, 0xD0, 0x8E, 0x6A, 0x02, 0x08, 0x00, 0xE4 },  // pre heater temp sensor
-  { 0x10, 0xCB, 0x95, 0x6A, 0x02, 0x08, 0x00, 0x4B }   // post heater temp sensor
+  { 0x10, 0xCB, 0x95, 0x6A, 0x02, 0x08, 0x00, 0x4B },  // post heater temp sensor
+  { 0x10, 0x07, 0x91, 0x6A, 0x02, 0x08, 0x00, 0xB6 }   // Pump temp sensor
 };
 
 
@@ -514,8 +513,7 @@ void loop ()
     waterTempSensors.requestTemperatures();   // Send the command to get temperatures
     TempPreHeater[NEW]  = waterTempSensors.getTempF(&tempSensors[0][0]);
     TempPostHeater[NEW] = waterTempSensors.getTempF(&tempSensors[1][0]);
-    
-    TempPump[NEW] = TempPumpHousing.readFarenheit();
+    TempPump[NEW] =       waterTempSensors.getTempF(&tempSensors[2][0]);
     
     // Low pass filter to smooth temperature data, http://bit.ly/Ov9r28
     float Smoothing = 0.3;  // smaller gives more smoothing, range 0 to 1.  1 is no smoothing

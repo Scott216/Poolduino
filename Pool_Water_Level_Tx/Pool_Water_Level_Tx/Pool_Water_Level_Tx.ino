@@ -12,7 +12,7 @@
  panStamp  http://www.panstamp.com/
  MMA8452Q Accelerometer https://www.sparkfun.com/products/10955
  pullup resistors for I2C
- Water Level detector
+ Float switch McMaster 50195K93
  
  MMA8452Q Accelerometer
  Data sheet: http://dlnmh9ip6v2uc.cloudfront.net/datasheets/Sensors/Accelerometers/MMA8452Q.pdf
@@ -120,6 +120,8 @@ void setup()
 
 void loop()
 {
+ 
+  static uint16_t batteryOld; // used previous battery reading if current one is invalid
   
   if( digitalRead(WATERLEVELSENSOR) == LOWATER && IsLidFlat() == true)
   { // Low water detected
@@ -151,6 +153,10 @@ void loop()
   { data.data[4] = false; }
   data.data[5] = IsLidFlat();          // IsLidFlat
   uint16_t battery = readVcc();        // Read battery voltage
+  if(battery < 2000)  // 2 volts
+  { battery = batteryOld; }  // use old value
+  else
+  { batteryOld = battery; }  // update old value with current reading
   data.data[6] = battery >> 8 & 0xff;  // High byte - shift bits 8 places, 0xff masks off the upper 8 bits
   data.data[7] = battery & 0xff;       // Low byte, just mask off the upper 8 bits
   
@@ -179,7 +185,7 @@ bool IsLidFlat()
 }
 
 
-// Read battery volts
+// Read battery volts, returned value is in millivolts
 unsigned int readVcc()
 {
   // Read 1.1V reference against AVcc

@@ -1,9 +1,6 @@
 
-Git directory:
-cd Dropbox/Arduino/Pool_Controller/
+This Arduino receives data from the outside pool controller and uploads it to Xively
+http://xively.com/feeds/65673/workbench
+It uses an XBee series 1
 
-Commit changes:
-git commit -m "comments"
 
-Update Github:
-git remote add origin https://github.com/Scott216/Poolduino.git

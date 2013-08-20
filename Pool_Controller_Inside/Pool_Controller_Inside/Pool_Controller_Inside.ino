@@ -5,15 +5,15 @@
  
  
  To do:
- Consider tracking std dev of pressure.  Looking at COSM data, 100 pts is a pretty good sample size
+ Consider tracking std dev of pressure.  Looking at Xively data, 100 pts is a pretty good sample size
  There is a library for this: http://arduino.cc/playground/Main/Statistics
  SD < 0.3 is nice and stable.  Over .75 it's starting to flucteate, over 1 is getting bad, over 2 you definitely have problems
  See if you can reduce RAM so you can run on Uno or Leonardo
  Reboot if xively feed freezes
- If pump is running at night, send text alert
+ 
  Send tweet if lost xbee communication
  See if you can update water added today every minute, not just when it's complete it's cycle
- Send tweet if low battery
+
  
  
  Figure out how to send commands to outside xbee from inside xbee, then see if you can shut pump off from iphone.
@@ -96,9 +96,7 @@
  
  */
 
-
-// #define WDT          // Watch Dog timer
-#define PRINT_DEBUG     // Comment out to turn of serial printing
+#define PRINT_DEBUG     // Comment out to turn off serial printing
 
 #include <SPI.h>             // Communicate with SPI devices http://arduino.cc/en/Reference/SPI
 #include <Ethernet.h>        // LIbrary for Arduino ethernet shield http://arduino.cc/en/Reference/Ethernet
@@ -106,8 +104,7 @@
 #include <Xively.h>          // http://github.com/xively/xively_arduino
 #include <Twitter.h>         // http://arduino.cc/playground/Code/TwitterLibrary, get token from token at http://arduino-tweet.appspot.com/
 #include <XBee.h>            // http://code.google.com/p/xbee-arduino/     Modified per http://arduino.cc/forum/index.php/topic,111354.0.html
-#include <avr/wdt.h>         // Watchdog timer, Example code: http://code.google.com/p/arduwind/source/browse/trunk/ArduWind.ino
-#include <Tokens.h>          // Tokens for COSM and twitter
+#include <Tokens.h>          // Tokens for Xively and twitter
 #include "LocalLibrary.h"    // Include application, user and local libraries
 
 #define BAUD_RATE 9600  // Baud for bith Xbee and serial monitor
@@ -178,12 +175,12 @@ byte ioStatusbyte;              // Each bit shows input value of digital I/O
 #define NUM_XIVELY_STREAMS         16
 
 #define TWEETMAXSIZE              60   // Character array size for twitter message
-#define COSM_UPDATE_INTERVAL   15000   // COSM upload interval (mS)
+#define COSM_UPDATE_INTERVAL   15000   // Xively upload interval (mS)
 #define COSM_UPDATE_TIMEOUT  1800000   // 30 minute timeout - if there are no successful updates in 30 minutes, reboot
-#define FEED_ID 65673                  // Xively Feed ID    https://cosm.com/feeds/65673
+#define FEED_ID 65673                  // Xively Feed ID http://xively.com/feeds/65673/workbench
 // #define FEED_ID 4663  // Test feed
 uint32_t cosm_uploadTimout_timer; // Timer to reboot if no successful uploads in 30 minutes
-uint32_t cosm_upload_timer;   // Timer for uploading to COSM
+uint32_t cosm_upload_timer;   // Timer for uploading to Xively
 
 const int bufferSize = 30;
 char bufferValue[bufferSize]; // enough space to store the string we're going to send
@@ -217,8 +214,8 @@ XivelyClient xivelyclient(client);
 
 // Ethernet Setup
 byte mac[] = { 0xCC, 0xAC, 0xBE, 0x21, 0x91, 0x43 };
-uint8_t successes = 0;    // COSM upload success, will rollover at 255, but that's okay.  This makes is easy to see on COSM is things are running
-uint8_t failures = 0;     // COSM upload failures
+uint8_t successes = 0;    // Xively upload success, will rollover at 255, but that's okay.  This makes is easy to see on Xively is things are running
+uint8_t failures = 0;     // Xively upload failures
 
 
 // Xbee Setup stuff
@@ -248,11 +245,6 @@ bool ReadXBeeData(float *poolData, uint16_t *Tx_Id);
 int SendTweet(char msgTweet[], double fpoolTime);
 int freeRam(bool PrintRam);
 void controllerStatus(char * txtStatus, int poolstatus);
-
-#ifdef WDT
-void WatchdogSetup(void);
-void WDT_ForceTimeout();
-#endif
 
 
 // Token for Twitter Account, PachubeAlert
@@ -288,11 +280,6 @@ void setup(void)
   Ethernet.begin(mac);
   delay(1000);
   
-#ifdef WDT
-  WatchdogSetup();// setup Watch Dog Timer to 8 sec
-  wdt_reset();
-#endif
-  
   
   // Setup flashes LEDs so you know Arduino is booting up
   // parameters, Pin#, times to flash, wait time
@@ -308,7 +295,7 @@ void setup(void)
   
   xbeeTimeout       = millis() + 300000UL; // 5 minutes
   xBeeTimeoutFlag   = false;
-  gotNewData        = false;  // Initialize, true when new we receive new data from xbee, is reset when it uploads to COSM
+  gotNewData        = false;  // Initialize, true when new we receive new data from xbee, is reset when it uploads to Xively
   
 #ifdef PRINT_DEBUG
   Serial.print(F("End setup "));
@@ -324,16 +311,16 @@ void loop(void)
   
   static float poolData[NUM_POOL_DATA_PTS];  // Array to hold pool data received from outside controller
   
-  // Flags so Twitter messages are only sent once
-  static bool tf_highPresDrop;    // High pressure across filter
-  static bool HighPressureFlag;          // Pressure before filter
-  static bool LowPressureFlag;           // Low pressure
-  static bool HighAmpsFlag;              // High pump amps
-  static bool HighPumpTempFlag;          // High pump temperature
-  static bool eShutdownFlag;             // Emergency shutdown flag
-  static bool waterFillCntDnFlag;        // Water fill valve is on
-//  static bool tf_Pump	OnAtNight;         // Pump on at night
-  
+  // Twitter Flags (tf_) used so Twitter messages are only sent once
+  static bool tf_highPresDrop;       // High pressure across filter
+  static bool tf_highPressure;       // Pressure before filter
+  static bool tf_lowPressure;        // Low pressure
+  static bool tf_highAmps;           // High pump amps
+  static bool tf_highPumpTemp;       // High pump temperature
+  static bool tf_emergencyShutdown;  // Emergency shutdown flag
+  static bool tf_waterFillOn;        // Water fill valve is on
+  static bool tf_pumpOnAtNight;      // Pump on at night
+
   
   
   uint16_t xbeeID;                // ID of transimitting xbee
@@ -342,7 +329,7 @@ void loop(void)
   // If Arduino recently restarted (last 10 seconds), set waterFillCntDnFlag to true so it
   // doesn't send a tweet if the water fill is on
   if(millis() < 10000)
-  { waterFillCntDnFlag = true; }
+  { tf_waterFillOn = true; }
   
   
   // Read XBee data
@@ -377,17 +364,10 @@ void loop(void)
 #endif
   }
   
-#ifdef WDT
-  wdt_reset();  // Reset watchdog time
-#endif
-  
-  // Upload data to COSM
+  // Upload data to Xively
   if ((long)(millis() - cosm_upload_timer) >= 0)
   {
     cosm_upload_timer = millis() + COSM_UPDATE_INTERVAL;  // Reset timer
-#ifdef WDT
-    wdt_reset();  // Reset watchdog timer
-#endif
     
     // Send Data to Xively
     SendDataToXively(poolData);
@@ -395,44 +375,44 @@ void loop(void)
   
   // High Pump Amps
   // Outside arduino will shut down pump if amps > 20
-  if(poolData[P_PUMP_AMPS] >= 17 && HighAmpsFlag == false)
+  if(poolData[P_PUMP_AMPS] >= 17 && tf_highAmps == false)
   {
-    HighAmpsFlag = true;
+    tf_highAmps = true;
     sprintf(msgTweet, "High pump amps: %d.", (int) poolData[P_PUMP_AMPS]);
     SendTweet(msgTweet, poolData[P_POOL_TIME]);
   }
   
   // Reset high amps flag
-  if(poolData[P_PUMP_AMPS] < 10 && HighAmpsFlag == true)
-  { HighAmpsFlag = false; }
+  if(poolData[P_PUMP_AMPS] < 10 && tf_highAmps == true)
+  { tf_highAmps = false; }
   
   // High Pump temperature
   // Outside arduino will shut down pump at if temperatrue > 180 F
-  if(poolData[P_TEMP_PUMP] >= 175 && HighPumpTempFlag == false)
+  if(poolData[P_TEMP_PUMP] >= 175 && tf_highPumpTemp == false)
   {
-    HighPumpTempFlag = true;
+    tf_highPumpTemp = true;
     sprintf(msgTweet, "High pump temp: %d.", (int) poolData[P_TEMP_PUMP]);
     SendTweet(msgTweet, poolData[P_POOL_TIME]);
   }
   
   // Reset high pump temp flag
-  if(poolData[P_TEMP_PUMP] < 110 && HighPumpTempFlag == true)
+  if(poolData[P_TEMP_PUMP] < 110 && tf_highPumpTemp == true)
   {
-    HighPumpTempFlag = false;
+    tf_highPumpTemp = false;
   }
   
   // High Pump pressure
-  if(poolData[P_PRESSURE1] >= 40 && HighPressureFlag == false)
+  if(poolData[P_PRESSURE1] >= 40 && tf_highPressure == false)
   {
-    HighPressureFlag = true;
+    tf_highPressure = true;
     sprintf(msgTweet, "High pump pressure: %d.", (int) poolData[P_PRESSURE1]);
     SendTweet(msgTweet, poolData[P_POOL_TIME]);
   }
   
   // Reset high amps flag
-  if(poolData[P_PRESSURE1] < 110 && HighPressureFlag == true)
+  if(poolData[P_PRESSURE1] < 110 && tf_highPressure == true)
   {
-    HighPressureFlag = false;
+    tf_highPressure = false;
   }
   
   // Check pressure drop across filter
@@ -450,24 +430,24 @@ void loop(void)
   }
   
   // Check Low Pressure Counter
-  if(poolData[P_LOW_PRES_CNT] >= 17 && LowPressureFlag == false)
+  if(poolData[P_LOW_PRES_CNT] >= 17 && tf_lowPressure == false)
   {
-    LowPressureFlag = true;
+    tf_lowPressure = true;
     strcpy(msgTweet, "Low pressure fluctuations at pool pump.");
     SendTweet(msgTweet, poolData[P_POOL_TIME]);
   }
   
   // Reset low pressure flag
-  if(poolData[P_LOW_PRES_CNT] == 0 && LowPressureFlag == true)
+  if(poolData[P_LOW_PRES_CNT] == 0 && tf_lowPressure == true)
   {
-    LowPressureFlag = false;
+    tf_lowPressure = false;
   }
   
   // Check for emergency shutdown and send tweet
-  if(poolData[P_CONTROLLER_STATUS] >= 4 && eShutdownFlag == false)
+  if(poolData[P_CONTROLLER_STATUS] >= 4 && tf_emergencyShutdown == false)
   {
     char txtShutdown[17+1];
-    eShutdownFlag = true;
+    tf_emergencyShutdown = true;
     strcpy(msgTweet, "Emergency Shutdown - ");
     controllerStatus(txtShutdown,  poolData[P_CONTROLLER_STATUS]);
     strcat(msgTweet, txtShutdown);
@@ -475,41 +455,50 @@ void loop(void)
   }
   
   // Reset emergency shutdown flag
-  if(poolData[P_CONTROLLER_STATUS] < 4 && eShutdownFlag == true)
+  if(poolData[P_CONTROLLER_STATUS] < 4 && tf_emergencyShutdown == true)
   {
-    eShutdownFlag = false;
+    tf_emergencyShutdown = false;
   }
   
   
-  // Send tweet if water fill timer is started
-  if(poolData[P_WATER_FILL_COUNTDN] > 1 && waterFillCntDnFlag == false)
+  // Send Tweet if water fill timer is opened
+  if(poolData[P_WATER_FILL_COUNTDN] > 1 && tf_waterFillOn == false)
   {
     // Wait a couple seconds in ccase water fill button is pressed a couple times, then read XBee data again
     delay(2500);
     ReadXBeeData(poolData, &xbeeID);
     sprintf(msgTweet, "Water fill started for %d minutes.", (int) poolData[P_WATER_FILL_COUNTDN]);
     SendTweet(msgTweet, poolData[P_POOL_TIME]);
-    waterFillCntDnFlag = true;  // flag so Tweet is only sent once
+    tf_waterFillOn = true;  // flag so Tweet is only sent once
   }
   
   // Reset water fill timer flag
-  if(poolData[P_WATER_FILL_COUNTDN] == 0 && waterFillCntDnFlag == true)
+  if(poolData[P_WATER_FILL_COUNTDN] == 0 && tf_waterFillOn == true)
   {
-    waterFillCntDnFlag = false;
+    tf_waterFillOn = false;
   }
+  
+  // Send Tweet of pump is running at night
+  if(poolData[P_PUMP_AMPS] > 6 && poolData[P_POOL_TIME] >= 21 && tf_pumpOnAtNight == false)
+  {
+    tf_pumpOnAtNight = true;
+    strcpy(msgTweet, "It's 9 PM did you know the pool pump is on?");
+    SendTweet(msgTweet, poolData[P_POOL_TIME]);
+  }
+
+  // Reset pool on at night flag
+  if(poolData[P_POOL_TIME] < 21 && tf_pumpOnAtNight == true)
+  { tf_pumpOnAtNight = false; }
+  
   
   // Reboot if no successful updates in 30 minutes
   if((long) (millis() - cosm_uploadTimout_timer) >= 0)
   {
-    strcpy(msgTweet, "Reboot: No uploads to COSM in over 30 minutes.");
+    strcpy(msgTweet, "Reboot: No uploads to Xively in over 30 minutes.");
     SendTweet(msgTweet, poolData[P_POOL_TIME]);
     cosm_uploadTimout_timer = millis() + COSM_UPDATE_TIMEOUT;
     delay(1000);
-#ifdef WDT
-    WDT_ForceTimeout();
-#else
     software_Reset();
-#endif
   }
   
   // If PRINT_DEBUG is on, then delay 1000 so you don't fill up the serial monitor too fast
@@ -522,7 +511,7 @@ void loop(void)
 
 //=========================================================================================================
 // Send twitter text, appends the time to the message to avoid twitter blocking duplicate messages
-//======================================================================================
+//=========================================================================================================
 int SendTweet(char * txtTweet, double fpoolTime)
 {
   
@@ -574,7 +563,7 @@ int SendTweet(char * txtTweet, double fpoolTime)
   Serial.println(txtTweet);
 #endif
   
-  cosm_upload_timer = millis() + COSM_UPDATE_INTERVAL; // increase timer for COSM so it doesn't send right after Twitter
+  cosm_upload_timer = millis() + COSM_UPDATE_INTERVAL; // increase timer for Xively so it doesn't send right after Twitter
   
   
   
@@ -588,11 +577,6 @@ int SendTweet(char * txtTweet, double fpoolTime)
 //======================================================================================================================================
 bool SendDataToXively(float *xivelyData)
 {
-  
-#ifdef WDT
-  wdt_reset();  // Reset watchdog time
-#endif
-  
 #ifdef PRINT_DEBUG
   Serial.println(F("\n\nSend to Xively"));
 #endif
@@ -645,12 +629,12 @@ bool SendDataToXively(float *xivelyData)
   if(xBeeTimeoutFlag == true)
   { // No communication with XBEE
     Serial.println(F("No Xbee Comm"));
-    datastreams[10].setBuffer("NO XBEE COMM");  // 10 - Controller status - sends text to COSM, not numbers
+    datastreams[10].setBuffer("NO XBEE COMM");  // 10 - Controller status - sends text to Xively, not numbers
   }
   else
   {
     controllerStatus(textForCOSM,  xivelyData[P_CONTROLLER_STATUS]);  // Convert controller status number to text
-    datastreams[10].setBuffer(textForCOSM);                           // 10 - Controller status - sends text to COSM, not numbers
+    datastreams[10].setBuffer(textForCOSM);                           // 10 - Controller status - sends text to Xively, not numbers
   }
   
   datastreams[11].setInt(successes); // 11 - network successes
@@ -669,11 +653,9 @@ bool SendDataToXively(float *xivelyData)
 #ifdef PRINT_DEBUG
       Serial.println("Successful Xively upload");
 #endif
-      // Flash twice when we send data to COSM successfully
+      // Flash twice when we send data to Xively successfully
       flashLed(LED_COSM_SUCCESS, 1, 150);
-#ifdef WDT
-      wdt_reset();
-#endif
+
       return true;
       break;
     case HTTP_ERROR_CONNECTION_FAILED:
@@ -751,10 +733,10 @@ bool ReadXBeeData(float *poolData, uint16_t *Tx_Id)
       {
         RxData[i/2]  = rx16.getData(i) << 8;
         RxData[i/2] |= rx16.getData(i+1);
-        poolData[i/2] = (float) RxData[i/2] / 10.0; // value from XBee are 10x, convert back to normal size, except last 2 status bytes
+        poolData[i/2] = (float) RxData[i/2] / 10.0; // value from XBee are 10x, convert back to normal size
       }
       
-      // But status byts into byte variables
+      // Put status bytes into byte variables
       sensorStatusbyte = poolData[P_SENSORSTATUSBYTE];    // Each bit determines if sensor is operating properly
       ioStatusbyte = poolData[P_IOSTATUSBYTE];            // I/O state of digital I/O
       

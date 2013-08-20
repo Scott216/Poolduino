@@ -1,12 +1,9 @@
-//
-//  Git
-//  Text
-//  ----------------------------------
-//  Developed with embedXcode
-//
-//  Project Pool_Controller_Inside
-//  Created by Scott on 7/31/13
-//  Copyright © 2013 Scott Goldthwaite
-//  Licence CC = BY SA NC
-//
 
+Git directory:
+cd Dropbox/Arduino/Pool_Controller/
+
+Commit changes:
+git commit -m "comments"
+
+Update Github:
+git push
