@@ -37,13 +37,19 @@
 #define WATER_OUTPUT        11   // Adds water to pool
 #define PUMP_INPUT_AUTO     12   // Pump is on schedule
 #define PUMP_INPUT_MAN      13   // Pump manual override
+#define PRE_HEAT_TEMP        0   // Pre-heater temperature
+#define POST_HEAT_TEMP       1   // Post-heater temperature
+#define PUMP_TEMP            2   // Pump temperature
+#define PRE_FILTER_PRESSURE  0   // Pre-filter water pressure
+#define POST_FILTER_PRESSURE 1   // Post-filter water pressure
+#define WATER_FILL_PRESSURE  2   // Water fill pressure
 
 
 // Adjustment to temperature probes
 #define CALIBRATE_TEMP1  -3.0
 #define CALIBRATE_TEMP2  -3.5
 
-#define SENSOR_READ_INTERVAL    400   // Read sensor every 250mS
+#define SENSOR_READ_INTERVAL    250   // Read sensor every 250mS
 #define TX_INTERVAL            2000   // Send data to house every 2 seconds
 #define ACK_RESPONSE_WAIT_TIME  250   // Time (ms) program waits for an ACK response from other XBee. Normal response is about 15mS
 #define PUMP_ON_TIME            7.5   // 7:30 AM
@@ -222,18 +228,20 @@ void setup ()
 void loop ()
 {
   
-  static int ReadSensorCount;          // counts time sensor is read and is then used to take average
+//  static int ReadSensorCount;          // counts time sensor is read and is then used to take average
   static uint32_t SensorTimer;         // Timer for reading sensor every second
   static uint32_t TX_Timer;            // Timer to send data to house
   static uint32_t ReadTime;            // Timer for reading the Real Time Clock
   uint32_t xbeeWaitTime;               // Measures actual XBee response time, mS
-  static double TempPreHeater[2];      // Temperature before heater
-  static double TempPostHeater[2];     // Temperature after heater
-  static double TempPump[2];           // Temperature of pump housing
+//  static double TempPreHeater[2];      // Temperature before heater
+//  static double TempPostHeater[2];     // Temperature after heater
+//  static double TempPump[2];           // Temperature of pump housing
+  static float temperature[3];         // Pre-heater temp (0), Post-Heter temp (1), pump temp (2)
+  static float pressure[3];            // Pre-filter pressure (0), Post-filter pressure (1), water fill pressure (2)
   static double PumpAmps;              // Amps going to pump
-  static double Pressure1;             // Pressure before filter
-  static double Pressure2;             // Pressure after filter
-  static double Pressure3;             // Pressure at water fill valve
+//  static double Pressure1;             // Pressure before filter
+//  static double Pressure2;             // Pressure after filter
+//  static double Pressure3;             // Pressure at water fill valve
   static double poolTime;              // Time from Real Time Clock convted to decimal
   static double PressPreFilter;        // Pressure before filter, don't use Pressure1 because it's the cumulative ADC value until right before it's trasmitted to xbee
   static uint8_t waterAddedToday;      // minutes of water added today
@@ -279,9 +287,6 @@ void loop ()
     waterFillResetTime = millis();  // Used to time how long button is pressed, used for 2 second reset of water fill timer
     
     // Add time to water fill timer
-#ifdef PRINT_DEBUG
-    Serial.println(F("Add time to water fill timer"));
-#endif
     if(WaterFillTime <= millis() && analogRead(WATER_FILL_PRESSURE) > WATER_FILL_PRESS_THRESH && digitalRead(WATER_OUTPUT) == LOW)  // need to check for pressure here becuse if valve is already open, pressure will be low
     { // water fill is off, add 15 minutes to timer
       WaterFillTime = millis() + WATER_FILL_BP_MIN;  // First time button is pushed, add 15 minutes to timer
@@ -290,12 +295,6 @@ void loop ()
     { // Water fill is already on, add another 15 minutes. Don't check water fill pressure because it will be low since valve is already open
       WaterFillTime += WATER_FILL_BP_MIN;          // Timer is already on (because output is on), add 15 more minutes
     }
-#ifdef PRINT_DEBUG
-    Serial.print(F("Water fill will stop in "));
-    Serial.print((double) ((WaterFillTime - millis()) / 60000.0));
-    Serial.println(F(" minutes"));
-#endif
-    
     debounceTimer = millis() + 200;
   }
   
@@ -304,9 +303,6 @@ void loop ()
   // On bootup the .onRelease() returns true, even though button hasn't been pushed
   if(btnWaterFill.onRelease() && (millis() - waterFillResetTime) > 2000  && waterFillResetTime > 0)
   {
-#ifdef PRINT_DEBUG
-    Serial.println(F("Resetting Water fill timer"));
-#endif
     WaterFillTime = millis();
   }
   
@@ -328,8 +324,8 @@ void loop ()
     }  // Reset poolStatus when valve is turned off
   }
   
-  digitalWrite(WATER_FILL_PB_LED, digitalRead(WATER_OUTPUT));  // Turn on pushbutton LED when water fill valve is running
-  
+  // Turn on pushbutton LED when water fill valve is running
+  digitalWrite(WATER_FILL_PB_LED, digitalRead(WATER_OUTPUT));  
   
   // Record time water fill valve is open
   // Check to see if water fill valve has just opened
@@ -339,9 +335,6 @@ void loop ()
     // Valve just opened, set waterFillOnTrigger and set water fill start time
     waterFillOnTrigger = true;
     waterFillStart = millis();
-#ifdef PRINT_DEBUG
-    Serial.println(F("\nOpen Water Fill Valve\n"));
-#endif
   }
   
   // check to see if water fill valve has just closed
@@ -352,14 +345,6 @@ void loop ()
     waterFillOnTrigger = false;
     // Calculate time (minutes) that valve was on and to daily timer
     waterAddedToday += (int) ((millis() - waterFillStart) / 60000.0);
-    
-#ifdef PRINT_DEBUG
-    Serial.print(F("Minutes water was on: "));
-    Serial.println((int) ((millis() - waterFillStart) / 60000.0));
-    Serial.print(F("waterAddedToday "));
-    Serial.println(waterAddedToday);
-    delay(3000); //delay so you can read output
-#endif
   }
   
   // If low pressure is detected, increase counter, only if water fill solenoid is off
@@ -370,20 +355,12 @@ void loop ()
   {
     presFluctCounter++;
     presFluctResetFlag = true;
-#ifdef PRINT_DEBUG
-    Serial.print(F("Low Pressure Count = "));
-    Serial.println(presFluctCounter);
-#endif
   }
   
   // Reset flag for low pressure counter once pre filter pressure increases
   if(PressPreFilter > 17 && presFluctResetFlag == true)
   {
     presFluctResetFlag = false;
-#ifdef PRINT_DEBUG
-    Serial.print(F("Reset presFluctResetFlag. PressPreFilter = "));
-    Serial.println(PressPreFilter);
-#endif
   }
   
   // If low pressure counter > 20, add water to pool, 2x the pushbutton amount (30 min)
@@ -408,11 +385,11 @@ void loop ()
     lowPressTimer = millis() +  300000UL;  // start low pressure timer for 5 minutes (300k mS)
     lowPressTimerFlag = true;  // set flag so this lowPressTimer isn't updated again
   }
-  
+
+/*  
   // Check for low pressure when pump first starts up in morning. SRG don't need this after you setup low water level
   // detector in skimmer lid.
   // If time is between 1 and 5 minutes after morning start time and pressure is low, add 15 minutes of water
-  //srglow
   if( digitalRead(PUMP_OUTPUT) == HIGH &&
      poolTime >= (PUMP_ON_TIME + 1.0/60.0) &&
      poolTime <= (PUMP_ON_TIME + 5.0/60.0)  &&
@@ -424,13 +401,14 @@ void loop ()
     lowPressTimer = WaterFillTime;    // don't let 5 minute shutdown happen
     Serial.println(F("Startup low pressure, turn water on"));
   }
-  
+
   if ( poolTime >= PUMP_ON_TIME + 6.0/60.0)
   {
     startupLowPressFlag = false;
   }  // reset startuplowPress for next day.  SRG - don't need after low pressure sensor
   
-  
+*/
+
   // If pressure returns to normal or pump is off, reset low pressure timer flag
   if(PressPreFilter > 14 || digitalRead(PUMP_OUTPUT) == LOW)
   {
@@ -447,7 +425,7 @@ void loop ()
   
   // Shutdown pump if motor temp is too high
   // Need to reboot Arduino to restart
-  if(TempPump[NEW] > 180 && EmergencyShutdown == 0)
+  if(temperature[PUMP_TEMP] > 180 && EmergencyShutdown == 0)
   {
     EmergencyShutdown = 2;
     poolStatus = statusEmergencyHiPumpTemp;
@@ -468,9 +446,6 @@ void loop ()
   {
     EmergencyShutdown = 1;
     poolStatus = statusEmergencyLoPresCont;
-#ifdef PRINT_DEBUG
-    Serial.println(F("Low pressure (5 min) shutdown"));  // srg debug
-#endif
   }
   
   // Turn pump on if:
@@ -508,6 +483,7 @@ void loop ()
   if ((long)(millis() - SensorTimer) >= 0 )
   { // Read Sensors
     SensorTimer = millis() + SENSOR_READ_INTERVAL;
+/*
     ReadSensorCount++;  // Increment sensor read counter - used in averaging the values
     
     waterTempSensors.requestTemperatures();   // Send the command to get temperatures
@@ -529,9 +505,45 @@ void loop ()
     Pressure1   += (double) analogRead(PRESSURE1_PIN);
     Pressure2   += (double) analogRead(PRESSURE2_PIN);
     Pressure3   += (double) analogRead(WATER_FILL_PRESSURE);
+*/
+    // Read temperature sensors and use low pass filter to smooth
+    float Smoothing = 0.3;  // smaller gives more smoothing, range 0 to 1.  1 is no smoothing
+    waterTempSensors.requestTemperatures();   // Send the command to get temperatures
+    for (byte i = 0; i < 3; i++)
+    { temperature[i] = (Smoothing * waterTempSensors.getTempF(&tempSensors[i][0])) + ((1.0 - Smoothing) * temperature[i]); }
+
+    // Read pressure sensors and use low pass filter to smooth
+    float newPressure;
+    newPressure = 0.0343 * (float) analogRead(PRESSURE1_PIN) - 5.9077;  // srg: 12.5 psi = 500 ADC, 0 PSI = 193 ADC, calc seems to be about 1.5 PSI Low
+    if (newPressure < 0.7)  // if pressure is near zero, set to zero
+    { newPressure = 0.0; }
+    pressure[PRE_FILTER_PRESSURE] = (Smoothing * newPressure) + ((1.0 - Smoothing) *  pressure[PRE_FILTER_PRESSURE]);
     
+    newPressure = 0.0359 * (float) analogRead(PRESSURE2_PIN) - 6.2548;
+    if (newPressure < 0.7)  // if pressure is near zero, set to zero
+    { newPressure = 0.0; }
+    pressure[POST_FILTER_PRESSURE] = (Smoothing * newPressure) + ((1.0 - Smoothing) *  pressure[POST_FILTER_PRESSURE]);
+
+
+    // Water fill pressure could use two different sensors, 0-30 PSI or 0-100 PSI
+    if (analogRead(WATER_FILL_PRESSURE) > 900 )
+    { // using 0-30 PSI sensor
+      newPressure = 0.0359 * (float) analogRead(WATER_FILL_PRESSURE) - 6.2548;
+    }
+    else
+    { // using 0-100 PSI sensor
+      newPressure = 0.12225 * (float) analogRead(WATER_FILL_PRESSURE) - 25.061;
+    }
+    
+    if (newPressure < 0.7)  // if pressure is near zero, set to zero
+    { newPressure = 0.0; }
+    pressure[WATER_FILL_PRESSURE]  = (Smoothing * newPressure) + ((1.0 - Smoothing) *  pressure[WATER_FILL_PRESSURE]);
+    
+    // Read pump amps and use low pass filter
+    PumpAmps = (Smoothing * (float) analogRead(PUMP_AMPS_PIN)) + ((1.0 - Smoothing) *  PumpAmps);
   }
   
+
   // Calculate averages and send data to Arduino in the house via XBee
   if((long)(millis() - TX_Timer) >= 0 )
   {
@@ -539,7 +551,7 @@ void loop ()
     
     // Request I2C data from panStamp
     getI2CData();
-    
+/*
     // Calculate averages and perform ADC conversions
     PumpAmps       = PumpAmps / ReadSensorCount;
     PumpAmps       = PumpAmps * 0.0185;
@@ -558,64 +570,65 @@ void loop ()
     if (Pressure1 < 0.7) Pressure1 = 0.0;
     if (Pressure2 < 0.7) Pressure2 = 0.0;
     if (Pressure3 < 0.7) Pressure3 = 0.0;
-    /*
-     Pressure1 = 2.3 * Pressure2;  //srg temporary until new pressure gauge is installed
-     if(Pressure1 > 30.0) Pressure1 = 26;
-     PressPreFilter = Pressure1;
-     */
+*/
     
     // Set bits for Sensor working properly or not
     
     // Validate temps recieved
-    if (TempPreHeater[NEW] < 50 || TempPreHeater[NEW]  > 200)
+//   if (TempPreHeater[NEW] < 50 || TempPreHeater[NEW]  > 180)
+   if (temperature[PRE_HEAT_TEMP] < 50 || temperature[PRE_HEAT_TEMP] > 180)
     {
       sensorStatusbyte  &= ~(1 << 0);
     }  // Invalid temp range, something wrong with sensor
     else
     {
       sensorStatusbyte |= 1 << 0;
-    }     // valid temp range
-    
-    if (TempPostHeater[NEW] < 50 || TempPostHeater[NEW]  > 200)
+    }  // valid temp range
+   
+//   if (TempPostHeater[NEW] < 50 || TempPostHeater[NEW]  > 180)
+   if (temperature[POST_HEAT_TEMP] < 50 || temperature[POST_HEAT_TEMP] > 180)
     {
       sensorStatusbyte  &= ~(1 << 1);
     }  // Invalid temp range, something wrong with sensor
     else
     {
       sensorStatusbyte |= 1 << 1;
-    }     // valid temp range
-    
-    if (TempPump[NEW] < 40 || TempPump[NEW]  > 300)
+    }  // valid temp range
+   
+//   if (TempPump[NEW] < 40 || TempPump[NEW]  > 300)
+   if (temperature[PUMP_TEMP] < 40 || temperature[PUMP_TEMP] > 300)
     {
       sensorStatusbyte  &= ~(1 << 2);
     }  // Invalid temp range, something wrong with sensor
     else
     {
       sensorStatusbyte |= 1 << 2;
-    }     // valid temp range
+    }  // valid temp range
     
     // Pre filter pressure
     // If pump is on and pressure2 is okay (>5), but higher then pressure1, then there is a problem with presssure1 (pre-filter)
-    if (digitalRead(PUMP_OUTPUT) == HIGH && Pressure2 > 5 && Pressure2 > Pressure1)
+//   if (digitalRead(PUMP_OUTPUT) == HIGH && Pressure2 > 5 && Pressure2 > Pressure1)
+   if (digitalRead(PUMP_OUTPUT) == HIGH && pressure[POST_FILTER_PRESSURE] > 5 && pressure[POST_FILTER_PRESSURE] > pressure[PRE_FILTER_PRESSURE])
     {
       sensorStatusbyte  &= ~(1 << 3);
     }  // Invalid pre-filter pressure
     else
     {
       sensorStatusbyte |= 1 << 3;
-    }     // valid pre-filter pressure range
+    }  // valid pre-filter pressure range
     
     // Post filter pressure
     // If pump is on and pre-filter pressure is okay, but post filter pressure is low, then there is problem with sensor
     // Note - when discharging water to waste, this will cause pressure2 to show an problem
-    if (digitalRead(PUMP_OUTPUT) == HIGH && Pressure1 > 10 && Pressure2 < 4)
+//   if (digitalRead(PUMP_OUTPUT) == HIGH && Pressure1 > 10 && Pressure2 < 4)
+   if (digitalRead(PUMP_OUTPUT) == HIGH && pressure[PRE_FILTER_PRESSURE] > 10 && pressure[POST_FILTER_PRESSURE] < 4)
     {
       sensorStatusbyte  &= ~(1 << 4);
     }  // Invalid pressure
     else
     {
       sensorStatusbyte |= 1 << 4;
-    }     // valid pressure range
+    } // valid pressure range
     
     // water fill pressure
     // Sensor outputs 1-5 volts, so min ADC should be about 200, so if it's less then 100, there is definitely a problem
@@ -647,13 +660,12 @@ void loop ()
     else
     {
       sensorStatusbyte |= 1 << 6;
-    }     // pump amps okay
+    } // pump amps okay
     
     // Water level sensor is set in getI2CData()
+        
     
-    
-    
-    // set ioStatusbyte bits
+    // set bits in ioStatusbyte 
     // shows input value for each I/O
     if(digitalRead(PUMP_OUTPUT) == HIGH)
     {
@@ -715,13 +727,21 @@ void loop ()
     
     
     // Put data in xbeeData array, multiple by 10 so you can get 1 decimal point, divide by 10 on the Rx side
-    xbeeData[0] = (int) (TempPreHeater[NEW]  * 10.0);
+/*  xbeeData[0] = (int) (TempPreHeater[NEW]  * 10.0);
     xbeeData[1] = (int) (TempPostHeater[NEW] * 10.0);
     xbeeData[2] = (int) (TempPump[NEW]       * 10.0);
     xbeeData[3] = (int) (PumpAmps            * 10.0);
     xbeeData[4] = (int) (Pressure1           * 10.0);
     xbeeData[5] = (int) (Pressure2           * 10.0);
     xbeeData[6] = (int) (Pressure3           * 10.0);
+*/
+    xbeeData[0] = (int) (temperature[PRE_HEAT_TEMP]     * 10.0);
+    xbeeData[1] = (int) (temperature[POST_HEAT_TEMP]    * 10.0);
+    xbeeData[2] = (int) (temperature[PUMP_TEMP]         * 10.0);
+    xbeeData[3] = (int) (PumpAmps                       * 10.0);
+    xbeeData[4] = (int) (pressure[PRE_FILTER_PRESSURE]  * 10.0);
+    xbeeData[5] = (int) (pressure[POST_FILTER_PRESSURE] * 10.0);
+    xbeeData[6] = (int) (pressure[WATER_FILL_PRESSURE]  * 10.0);
     xbeeData[7] = presFluctCounter      * 10;  // counts low pressure fluctuations, means water level is low or leaves in filter
     xbeeData[8] = (int) (poolStatus     * 10);
     xbeeData[9] = (int) (waterAddedToday * 10);  // Number of minutes fill water valve was open
@@ -744,70 +764,12 @@ void loop ()
     }
     xbee.send(tx);
     
-    
-#ifdef PRINT_DEBUG
-    //srgp      PrintIO(); // Print IO states
-    
-    
-    /*
-     Serial.print("Time ");
-     Serial.print(poolTime);
-     Serial.print("  Temp 1: ");
-     Serial.print(waterTempSensors.getTempF(&tempSensors[0][0]));
-     Serial.print("   Temp 2: ");
-     Serial.print(waterTempSensors.getTempF(&tempSensors[1][0]));
-     Serial.print("   Temp 3: ");
-     Serial.println(TempPumpHousing.readFarenheit());
-     */
-    
-    /*
-     Serial.print("   P1 ");
-     Serial.print(Pressure1);
-     Serial.print("   P2 ");
-     Serial.print(Pressure2);
-     Serial.print("   P3 ");
-     Serial.print(Pressure3);
-     Serial.println();
-     */
-    //    Serial.print("P3 ");
-    //    Serial.println(analogRead(WATER_FILL_PRESSURE));
-    /*
-     Serial.print("Time ");
-     Serial.print(poolTime);
-     Serial.print("\tP1: ");
-     Serial.print(Pressure1);
-     Serial.print("\tPreFilt: ");
-     Serial.print(PressPreFilter);
-     Serial.print("\tP2: ");
-     Serial.print(Pressure2);
-     Serial.print("\tLow press counter ");
-     Serial.print(presFluctCounter);
-     Serial.print("\tpresFluctResetFlag: ");
-     Serial.print(presFluctResetFlag);
-     Serial.print("\tlowPressTimerFlag: ");
-     Serial.print(lowPressTimerFlag);
-     if(lowPressTimerFlag)
-     {
-     Serial.print("\tSeconds to shutdown");
-     Serial.print((long(millis() - lowPressTimer))/1000);
-     }
-     Serial.println("");
-     */
-#endif
-    
     // after sending a tx request, we expect a status response
     // wait up to 1 seconds for the status response
     xbeeWaitTime = millis(); // use to measure actual XBee wait time
     if (xbee.readPacket(ACK_RESPONSE_WAIT_TIME))
     {
       // got a response!
-#ifdef PRINT_DEBUG
-      //srg          Serial.print(F("\n\nGot Rx response, it took "));
-      //          Serial.print(millis() - xbeeWaitTime);
-      //          Serial.println(F(" mS"));
-#endif
-      
-      // should be a znet tx status
       if (xbee.getResponse().getApiId() == TX_STATUS_RESPONSE)
       {
         xbee.getResponse().getZBTxStatusResponse(txStatus);
@@ -816,45 +778,36 @@ void loop ()
         if (txStatus.getStatus() == SUCCESS)
         {
           // success.  time to celebrate
-#ifdef PRINT_DEBUG
-          //srg              Serial.println(F("Tx Succeeded"));
-#endif
-          
         }
         else
         {
           // the remote XBee did not receive our packet. is it powered on?
-#ifdef PRINT_DEBUG
-          //              Serial.print(F("Tx Failed, xbee status = "));
-          //              Serial.println(txStatus.getStatus());
-#endif
         }
       }
     }
     else if (xbee.getResponse().isError())
     {
-#ifdef PRINT_DEBUG
-      Serial.print(F("Error reading packet.  Error code: "));
-      Serial.println(xbee.getResponse().getErrorCode());
-#endif
-      
+      #ifdef PRINT_DEBUG
+        Serial.print(F("Error reading packet.  Error code: "));
+        Serial.println(xbee.getResponse().getErrorCode());
+      #endif
     }
     else
     {
       // local XBee did not provide a timely TX Status Response.  Radio is not configured properly or connected
-#ifdef PRINT_DEBUG
-      Serial.println(F("XBee did not provide a timely Tx Status Response"));
-#endif
+      #ifdef PRINT_DEBUG
+        Serial.println(F("XBee did not provide a timely Tx Status Response"));
+      #endif
       
     }  // Finished waiting for XBee packet
     
     // Clear sensor data
-    PumpAmps        = 0;
+/*    PumpAmps        = 0;
     Pressure1       = 0;
     Pressure2       = 0;
     Pressure3       = 0;
     ReadSensorCount = 0;
-    
+*/    
   }  // TX_Timer
   
   // Reset waterAddedToday and low pressure counter every night at 11PM
@@ -866,9 +819,9 @@ void loop ()
   
 } // loop()
 
+
+
 // =============================================================
-
-
 // I2C Request data from panStamp slave
 bool getI2CData()
 {
@@ -914,31 +867,14 @@ bool getI2CData()
       LowLevelSensor = 2;  // 0 - level ok, 1 - level low, 2 - offline
       LevelSensorBatt = 0;
     }
-    
-    // srg temporarily print data
-    Serial.print("Low Water: ");
-    Serial.print(i2CData[2] ); // Low water detected
-    Serial.print("  Live: ");
-    Serial.print(i2CData[3] ); // live sensor inpout
-    Serial.print("  Flat: ");
-    Serial.print(i2CData[4] ); // Level Lid
-    Serial.print("  bat: ");
-    Serial.print(LevelSensorBatt);
-    Serial.print("  sensr ");
-    Serial.print(sensorStatusbyte, BIN);
-    Serial.print("  I/O ");
-    Serial.print(ioStatusbyte, BIN);
-    Serial.println();
-    
-    
     return true;
-  }  // end got packet
+  }  // end if(gotI2CPacket)
   else
   { 
-    return false; 
-  } // No Packet received
+    return false;  // No Packet received
+  } 
   
-} // end getData
+} // getI2CData()
 
 
 
