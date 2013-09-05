@@ -14,20 +14,19 @@
 #define PRINT_DEBUG                   // Comment out when done debugging
 
 
-//=== Digital I/O ===
-
-//=== Analog Inputs ===
+// === Analog I/O ===
 #define PRESSURE1_PIN        0   // Pressure before filter
 #define PRESSURE2_PIN        1   // Pressure after filter
-#define WATER_FILL_PRESSURE  5   // Pressure Transducer connected to water fill line.  Transducer is analog output, but sketch is reading as digital on/off
+#define WATER_FILL_PRESSURE_PIN  5   // Pressure at water fill line.  Transducer can be 0-30 or 0-100 PSI transducer
 #define PUMP_AMPS_PIN        3   // Pump amps input 20 Amp CT
 #define WATER_FILL_PB       A4   // Push-button for water fill, use as digital input - fills water 15 minutes each time it's pressed
-                                 // A5 unused
-                                 //=== Digital I/0 ===
+// A5 not used
+
+// === Digital I/0 ===
 #define XBEE_RX              0   // Communicate with Xbee
 #define XBEE_TX              1   // Communicate with Xbee
-                                 // Leonardo Pins 2 and 3 are used by I2C for the RTC
-                                 // D4 unused
+// Leonardo Pins 2 and 3 are used by I2C for the RTC
+// D4 unused
 #define ONE_WIRE_BUS         5   // OneWire temperture sensor bus
 #define TC_AMP_CS_P          6   // MAX6675 CS for Pump housing temperature
 #define TC_AMP_DO            7   // MAX6675 DO
@@ -37,12 +36,12 @@
 #define WATER_OUTPUT        11   // Adds water to pool
 #define PUMP_INPUT_AUTO     12   // Pump is on schedule
 #define PUMP_INPUT_MAN      13   // Pump manual override
-#define PRE_HEAT_TEMP        0   // Pre-heater temperature
-#define POST_HEAT_TEMP       1   // Post-heater temperature
-#define PUMP_TEMP            2   // Pump temperature
-#define PRE_FILTER_PRESSURE  0   // Pre-filter water pressure
-#define POST_FILTER_PRESSURE 1   // Post-filter water pressure
-#define WATER_FILL_PRESSURE  2   // Water fill pressure
+#define PRE_HEAT_TEMP        0   // Pre-heater temperature array
+#define POST_HEAT_TEMP       1   // Post-heater temperature array 
+#define PUMP_TEMP            2   // Pump temperature array
+#define PRE_FILTER_PRESSURE  0   // Pre-filter water pressure array
+#define POST_FILTER_PRESSURE 1   // Post-filter water pressure array
+#define WATER_FILL_PRESSURE  2   // Water fill pressure array
 
 
 // Adjustment to temperature probes
@@ -74,7 +73,7 @@ const byte  statusEmergencyHiAmps =      6;
 const byte  statusEmergencyHiPumpTemp =  7;
 const byte  statusShutdnFromWeb =        8;
 
-byte LowLevelSensor = 0;    // Water level ok = 0, water level low = 1, offline = 2
+byte LowLevelSensor = 0;       // Water level ok = 0, water level low = 1, offline = 2
 uint16_t LevelSensorBatt = 0;  // Battery voltage for level sensor
 
 // Initialize Real Time Clock
@@ -138,13 +137,9 @@ XBee xbee = XBee();
  6 Heater on/off relay output
  7 Water Level Sensor (real time)
  
- to set/clear a bits:
- statusbyte |= 1 << 5; will set bit 5 to 1
- statusbyte  &= ~(1 << 5); will clear bit 5,  invert the bit string with the bitwise NOT operator (~), then AND it.
- to read a bit: bitval = statusbyte & (1 << 5);  will but the value of bit 5 into bitval
  */
 
-// Allocate array to hold bytes to send to other xbee.  Size is 2x the numer if integers being sent
+// Allocate array to hold bytes to send to other xbee.  Size is 2x the number if integers being sent
 uint8_t xbeePayload[NUM_DATA_PTS * 2];
 // 16-bit addressing: Enter address of remote XBee, typically the coordinator
 Tx16Request tx = Tx16Request(XBEE_MY_ADDR_RX, xbeePayload, sizeof(xbeePayload));
@@ -270,7 +265,7 @@ void loop ()
   
   // Check low level sensor
   // If water fill valve is closed and there is water pressure and low level is detected, enable water fill valve by adding time the water fill timer
-  if(analogRead(WATER_FILL_PRESSURE) > WATER_FILL_PRESS_THRESH &&
+  if(analogRead(WATER_FILL_PRESSURE_PIN) > WATER_FILL_PRESS_THRESH &&
      digitalRead(WATER_OUTPUT) == LOW &&
      LowLevelSensor == 1 &&
      waterAddedToday <= MAX_WATER_FILL_MINUTES)
@@ -287,7 +282,7 @@ void loop ()
     waterFillResetTime = millis();  // Used to time how long button is pressed, used for 2 second reset of water fill timer
     
     // Add time to water fill timer
-    if(WaterFillTime <= millis() && analogRead(WATER_FILL_PRESSURE) > WATER_FILL_PRESS_THRESH && digitalRead(WATER_OUTPUT) == LOW)  // need to check for pressure here becuse if valve is already open, pressure will be low
+    if(WaterFillTime <= millis() && analogRead(WATER_FILL_PRESSURE_PIN) > WATER_FILL_PRESS_THRESH && digitalRead(WATER_OUTPUT) == LOW)  // need to check for pressure here becuse if valve is already open, pressure will be low
     { // water fill is off, add 15 minutes to timer
       WaterFillTime = millis() + WATER_FILL_BP_MIN;  // First time button is pushed, add 15 minutes to timer
     }
@@ -369,7 +364,7 @@ void loop ()
   if( presFluctCounter >= 20 &&
      digitalRead(WATER_OUTPUT) == LOW &&
      waterAddedToday < MAX_WATER_FILL_MINUTES &&
-     analogRead(WATER_FILL_PRESSURE) > WATER_FILL_PRESS_THRESH )
+     analogRead(WATER_FILL_PRESSURE_PIN) > WATER_FILL_PRESS_THRESH )
   {
     WaterFillTime = millis() + WATER_FILL_BP_MIN + WATER_FILL_BP_MIN;  // Add water for 30 minutes
     presFluctCounter = 0;  // Reset low pressure counter; counter won't count up when water fill valve is on
@@ -505,7 +500,7 @@ void loop ()
     PumpAmps    += (double) analogRead(PUMP_AMPS_PIN);
     Pressure1   += (double) analogRead(PRESSURE1_PIN);
     Pressure2   += (double) analogRead(PRESSURE2_PIN);
-    Pressure3   += (double) analogRead(WATER_FILL_PRESSURE);
+    Pressure3   += (double) analogRead(WATER_FILL_PRESSURE_PIN);
 */
     // Read temperature sensors and use low pass filter to smooth
     float Smoothing = 0.3;  // smaller gives more smoothing, range 0 to 1.  1 is no smoothing
@@ -527,10 +522,10 @@ void loop ()
 
 
     // Water fill pressure could use two different sensors, 0-30 PSI or 0-100 PSI
-    if (analogRead(WATER_FILL_PRESSURE) > 900 )
-    { newPressure = 0.0359  * (float) analogRead(WATER_FILL_PRESSURE) - 6.2548; } // using 0-30 PSI sensor
+    if (analogRead(WATER_FILL_PRESSURE_PIN) > 900 )
+    { newPressure = 0.0359  * (float) analogRead(WATER_FILL_PRESSURE_PIN) - 6.2548; } // using 0-30 PSI sensor
     else
-    { newPressure = 0.12225 * (float) analogRead(WATER_FILL_PRESSURE) - 25.061; } // using 0-100 PSI sensor
+    { newPressure = 0.12225 * (float) analogRead(WATER_FILL_PRESSURE_PIN) - 25.061; } // using 0-100 PSI sensor
     
     if (newPressure < 0.7)  // if pressure is near zero, set to zero
     { newPressure = 0.0; }
@@ -629,7 +624,7 @@ void loop ()
     
     // water fill pressure
     // Sensor outputs 1-5 volts, so min ADC should be about 200, so if it's less then 100, there is definitely a problem
-    if(digitalRead(WATER_FILL_PRESSURE) < 100)
+    if(analogRead(WATER_FILL_PRESSURE_PIN) < 100)
     {
       sensorStatusbyte |= 1 << 5;
     }   // sensor ok (1)
