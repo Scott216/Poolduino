@@ -153,7 +153,7 @@ TxStatusResponse txStatus = TxStatusResponse();
 uint32_t WaterFillTime;       // Timer to turn on water fill valve, adds 15 minutes every time pushbutton is pressed
 byte    EmergencyShutdown;    // shuts down pump if there a problem.  0 = OK, 1 = low pressure, 2 = high amps, 3= high pump temperature
 bool    presFluctResetFlag;   // Reset when pressure goes back to normal.  Used in conjunction with counter
-bool    startupLowPressFlag;  // used to detect low pressure when pump start up in the morning.  SRG Wont need after water level sensor is installed
+// bool    startupLowPressFlag;  // used to detect low pressure when pump start up in the morning.  SRG Wont need after water level sensor is installed
 
 // Setup pushbutton for water fill.  Input goes low when pressed.
 Button btnWaterFill = Button(WATER_FILL_PB, LOW);
@@ -215,7 +215,7 @@ void setup ()
   EmergencyShutdown = 0; // everything okay
   poolStatus = statusPumpOff;
   presFluctResetFlag = true; // set flag to true so no low pressue warning are given until pressure builds up
-  startupLowPressFlag == false;  // Reset flag
+//  startupLowPressFlag == false;  // Reset flag
   
 #ifdef PRINT_DEBUG
   Serial.println(F("Finished setup()"));
@@ -243,15 +243,15 @@ void loop ()
 //  static double Pressure2;             // Pressure after filter
 //  static double Pressure3;             // Pressure at water fill valve
   static double poolTime;              // Time from Real Time Clock convted to decimal
-  static double PressPreFilter;        // Pressure before filter, don't use Pressure1 because it's the cumulative ADC value until right before it's trasmitted to xbee
+//  static double PressPreFilter;        // Pressure before filter, don't use Pressure1 because it's the cumulative ADC value until right before it's trasmitted to xbee
   static uint8_t waterAddedToday;      // minutes of water added today
   static uint32_t waterFillStart;      // Saves millis setting of when water fill timer starts
   static uint32_t debounceTimer;       // Used to prevent double entries of water fill pushbutton
   static uint32_t waterFillResetTime;  // Used to time how long the water fill pushbutton is held.  If over 2 seconds, then reset water fill
   static uint16_t presFluctCounter;    // Counts low pressure fluctuationsuint32_t LowPressTimer;       // Times how long the pressure is low, used to shutdown pump if there is a problem
   static uint32_t lowPressTimer;       // Times how long the pressure is low, used to shutdown pump if there is a problem
-  static bool     lowPressTimerFlag;   // Flag for low pressure timer
-  static int PumpAmpsAvg;              // Average pump amps calculation for emergency shutdown
+  static bool isLowPressTimerRunning;  // Flag for low pressure timer, true if low pressure timer has started
+//  static int PumpAmpsAvg;              // Average pump amps calculation for emergency shutdown
   const byte NEW = 1;                  // Used in temperature smoothing
   const byte OLD = 0;                  // Used in temperature smoothing
   
@@ -348,7 +348,7 @@ void loop ()
   }
   
   // If low pressure is detected, increase counter, only if water fill solenoid is off
-  if(PressPreFilter < 13 &&
+  if(pressure[PRE_FILTER_PRESSURE] < 13 &&
      presFluctResetFlag == false &&
      digitalRead(WATER_OUTPUT) == LOW &&
      digitalRead(PUMP_OUTPUT) == HIGH )
@@ -358,7 +358,7 @@ void loop ()
   }
   
   // Reset flag for low pressure counter once pre filter pressure increases
-  if(PressPreFilter > 17 && presFluctResetFlag == true)
+  if(pressure[PRE_FILTER_PRESSURE] > 17 && presFluctResetFlag == true)
   {
     presFluctResetFlag = false;
   }
@@ -377,13 +377,14 @@ void loop ()
   }
   
   // Check for constant low pressure, not pressure fluctuations
-  if( PressPreFilter < 11 &&
+  // If pressure is low and low pressure timer has not started yet
+  if( pressure[PRE_FILTER_PRESSURE] < 11 &&
      digitalRead(PUMP_OUTPUT) == HIGH &&
-     lowPressTimerFlag == false &&
-     startupLowPressFlag == false )
+     isLowPressTimerRunning == false ) // && startupLowPressFlag == false )
   {
     lowPressTimer = millis() +  300000UL;  // start low pressure timer for 5 minutes (300k mS)
-    lowPressTimerFlag = true;  // set flag so this lowPressTimer isn't updated again
+    isLowPressTimerRunning = true;  // set flag so this lowPressTimer isn't updated again
+    Serial.println("Low pressure timer started");
   }
 
 /*  
@@ -410,14 +411,14 @@ void loop ()
 */
 
   // If pressure returns to normal or pump is off, reset low pressure timer flag
-  if(PressPreFilter > 14 || digitalRead(PUMP_OUTPUT) == LOW)
+  if( pressure[PRE_FILTER_PRESSURE] > 14 || digitalRead(PUMP_OUTPUT) == LOW)
   {
-    lowPressTimerFlag = false;
+    isLowPressTimerRunning = false;
   }
   
   // Shutdown pump if amps are too high
   // Need to reboot Arduino to restart
-  if(PumpAmpsAvg > 20 && EmergencyShutdown == 0)
+  if(PumpAmps > 20 && EmergencyShutdown == 0)
   {
     EmergencyShutdown = 3;
     poolStatus = statusEmergencyHiAmps;
@@ -442,7 +443,7 @@ void loop ()
   }
   
   // If pressure has been low for 5 minutes straight, shut down pump
-  if(long(millis() - lowPressTimer) > 0 && lowPressTimerFlag == true && EmergencyShutdown == 0)
+  if(long(millis() - lowPressTimer) > 0 && isLowPressTimerRunning == true && EmergencyShutdown == 0)
   {
     EmergencyShutdown = 1;
     poolStatus = statusEmergencyLoPresCont;
@@ -527,20 +528,16 @@ void loop ()
 
     // Water fill pressure could use two different sensors, 0-30 PSI or 0-100 PSI
     if (analogRead(WATER_FILL_PRESSURE) > 900 )
-    { // using 0-30 PSI sensor
-      newPressure = 0.0359 * (float) analogRead(WATER_FILL_PRESSURE) - 6.2548;
-    }
+    { newPressure = 0.0359  * (float) analogRead(WATER_FILL_PRESSURE) - 6.2548; } // using 0-30 PSI sensor
     else
-    { // using 0-100 PSI sensor
-      newPressure = 0.12225 * (float) analogRead(WATER_FILL_PRESSURE) - 25.061;
-    }
+    { newPressure = 0.12225 * (float) analogRead(WATER_FILL_PRESSURE) - 25.061; } // using 0-100 PSI sensor
     
     if (newPressure < 0.7)  // if pressure is near zero, set to zero
     { newPressure = 0.0; }
     pressure[WATER_FILL_PRESSURE]  = (Smoothing * newPressure) + ((1.0 - Smoothing) *  pressure[WATER_FILL_PRESSURE]);
     
     // Read pump amps and use low pass filter
-    PumpAmps = (Smoothing * (float) analogRead(PUMP_AMPS_PIN)) + ((1.0 - Smoothing) *  PumpAmps);
+    PumpAmps = (Smoothing * (float) analogRead(PUMP_AMPS_PIN) * 0.0185 ) + ((1.0 - Smoothing) *  PumpAmps);
   }
   
 
