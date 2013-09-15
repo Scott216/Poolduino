@@ -6,31 +6,31 @@
  -change WaterFillTime so it can handle millis rollover
  - web enabled remote shutdown
  - web enabled remote water fill
- -Test low pressure shutdown - the one for constant low pressure for 5 minutes.
  -Add small LCD screen to display status
- -Can you get rid of panstamps and just use Xbee for low water level.  You'll need to figure out how to do a low power setup for the xbee
- -See if you can use I2C.h library instead of wire.h because you can enable timeouts.  Problem is for the RTC you'll need conver this too so you're not using both wire.h and I2C.h at the same time
- -Got pressure shutdown when changing DE.  When on/off/auto is in off position, reset this timer
- 
+ -Can you get rid of panStamps and just use xbee for low water level.  You'll need to figure out how to do a low power setup for the xbee
+ -Replace wire.h library with I2C (if you are keeping panStamp).  Be sure to disable pull-ups on I2C lines  
+ -Use 3 momentary pushbuttons of On-Off-Auto.  You can use one analog input for all 3 plus water fill.  
+  You can do all all this on A4, which is where water fill input goes now. If you want Auto and On button 
+  to light up,  use pins D12 & D13, they are the current inputs to on-off-auto.  Make provision for heater on and pool light on pushbuttons.
+
+
  PCB Ideas
  Leonardo plug into PCB
  Build CT circuit onto PCB
  Terminal strips for all sensor connections
  Build RTC on PCB, digikey DS1307+-ND, Crystal digikey X1124-ND
  If you do your own RTC refer see pg 6 of this doc: http://www.emesystems.com/pdfs/parts/DS1307_xtal.pdf it explains PCB requirements for the crystal
- Build MAX6675 onto PCB (sparkfun has these)
  Small LCD to display status
- Put RTC on dedicated I2C pins
- Use Panstamp to get water level, communicate with Leonardo on I2C
- If you need more I/O, use panstamp
  
  
  Bugs:
+
+
  
  
  ==============================================================================================
  This sketch monitor swimming pool conditions: Water temp, pump pressure
- It will control the pump, can turn the heater on/off and turn
+ It will control the pump
  It will transmit data via xbee to another arduino inside the house which will send info to the internet
  
  
