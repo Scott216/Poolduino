@@ -6,11 +6,12 @@
  
  To do:
  See if you can reduce RAM so you can run on Uno or Leonardo
- Reboot if xively feed freezes
  Send tweet if lost xbee communication
  See if you can update water added today every minute, not just when it's complete it's cycle
-
- 
+ Send tweet if sensor goes bad
+ Don't seem to need xbeeID Tx_Id parameter in xbee function
+ Send tweet when heat comes on
+ Use SD Card to log data
  
  Figure out how to send commands to outside xbee from inside xbee, then see if you can shut pump off from iphone.
  Turn pump off from iphone/website http://www.yaler.org/
@@ -181,6 +182,8 @@ uint32_t xively_Upload_Timer;       // Timer for uploading to Xively
 const int bufferSize = 30;
 char bufferValue[bufferSize]; // enough space to store the string we're going to send
 
+const byte statusBufLen = 26;  // character buffer length for controller status text
+
 XivelyDatastream datastreams[] =
 {
   XivelyDatastream(STREAM_PRESSURE1,        strlen(STREAM_PRESSURE1),        DATASTREAM_FLOAT),
@@ -210,7 +213,7 @@ EthernetClient client;
 XivelyClient xivelyclient(client);
 byte mac[] = { 0xCC, 0xAC, 0xBE, 0x21, 0x91, 0x43 };
 uint8_t successes = 0;    // Xively upload success, will rollover at 255, but that's okay.  This makes is easy to see on Xively is things are running
-uint8_t failures = 0;     // Xively upload failures
+uint8_t failures =  0;    // Xively upload failures
 
 
 // Xbee Setup stuff
@@ -229,10 +232,10 @@ Twitter twitter(TWITTER_TOKEN);
 
 
 // I/O Setup
-#define LED_XBEE_ERROR      6  // LED flashes when XBee error
-#define LED_XBEE_SUCCESS    7  // LED flashes when XBee success
-#define LED_XIVELY_ERROR      6  // LED flashes when Xively error
-#define LED_XIVELY_SUCCESS    5  // LED flashes when Xively success
+#define LED_XBEE_ERROR       6  // LED flashes when XBee error
+#define LED_XBEE_SUCCESS     7  // LED flashes when XBee success
+#define LED_XIVELY_ERROR     6  // LED flashes when Xively error
+#define LED_XIVELY_SUCCESS   5  // LED flashes when Xively success
 
 
 // Array to hold pool data received from outside controller
@@ -331,7 +334,7 @@ void loop(void)
   static bool tweetstartup;
   if (tweetstartup == false && millis() > 20000)
   {
-    strcpy(msgTweet, "Pool Arduino has restarted.");
+    strcpy(msgTweet, "Inside pool monitor has restarted.");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
     tweetstartup = true;
   }
@@ -396,63 +399,66 @@ void sendAlarmMessage()
   // If Arduino recently restarted (last 10 seconds), set waterFillCntDnFlag to true so it
   // doesn't send a tweet if the water fill is on
   if(millis() < 10000)
-   { tf_waterFillOn = true; }
+  { tf_waterFillOn = true; }
   
   
   // High pump amps
   if(PoolData[P_PUMP_AMPS] >= 17 && tf_highAmps == false)
-   {
+  {
     tf_highAmps = true;
     sprintf(msgTweet, "High pump amps: %d.", (int) PoolData[P_PUMP_AMPS]);
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
-   }
+  }
   
   // High pump temperature
   if(PoolData[P_TEMP_PUMP] >= 175 && tf_highPumpTemp == false)
-   {
+  {
     tf_highPumpTemp = true;
     sprintf(msgTweet, "High pump temp: %d.", (int) PoolData[P_TEMP_PUMP]);
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
-   }
+  }
   
   // High pressure
   if(PoolData[P_PRESSURE1] >= 40 && tf_highPressure == false)
-   {
+  {
     tf_highPressure = true;
     sprintf(msgTweet, "High pump pressure: %d.", (int) PoolData[P_PRESSURE1]);
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
-   }
+  }
   
   // Check pressure drop across filter
   if((PoolData[P_PRESSURE1] > 25.0) && ((PoolData[P_PRESSURE1] - PoolData[P_PRESSURE2]) > 10.0) && (tf_highPresDrop == false))
-   {
+  {
     tf_highPresDrop = true;
     strcpy(msgTweet, "High filter pressure.");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
-   }
+  }
   
   // Check low pressure Counter
   if(PoolData[P_LOW_PRES_CNT] >= 17 && tf_lowPressure == false)
-   {
+  {
     tf_lowPressure = true;
     strcpy(msgTweet, "Low pressure fluctuations at pool pump.");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
-   }
+  }
   
   // Check for emergency shutdown and send tweet
   if(PoolData[P_CONTROLLER_STATUS] >= 4 && tf_emergencyShutdown == false)
-   {
-    char txtShutdown[17+1];
+  {
+    char txtStatus[statusBufLen];
     tf_emergencyShutdown = true;
     strcpy(msgTweet, "Emergency Shutdown - ");
-    controllerStatus(txtShutdown,  PoolData[P_CONTROLLER_STATUS]);
-    strcat(msgTweet, txtShutdown);
+    controllerStatus(txtStatus,  PoolData[P_CONTROLLER_STATUS]);
+    strcat(msgTweet, txtStatus);
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
-   }
+    #ifdef PRINT_DEBUG
+      Serial.println(msgTweet);
+    #endif
+  }
   
   // Send Tweet if water fill timer is opened
   if(PoolData[P_WATER_FILL_COUNTDN] > 1 && tf_waterFillOn == false)
-   {
+  {
     // Wait a couple seconds in case water fill button is pressed a couple times, then read XBee data again
     delay(2500);
     uint16_t xbeeID;                // ID of transimitting xbee
@@ -460,15 +466,15 @@ void sendAlarmMessage()
     sprintf(msgTweet, "Water fill started for %d minutes.", (int) PoolData[P_WATER_FILL_COUNTDN]);
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
     tf_waterFillOn = true;  // flag so Tweet is only sent once
-   }
+  }
   
   // Send Tweet of pump is running at night
   if(PoolData[P_PUMP_AMPS] > 6 && PoolData[P_POOL_TIME] >= 21 && tf_pumpOnAtNight == false)
-   {
+  {
     tf_pumpOnAtNight = true;
     strcpy(msgTweet, "Dude, turn off the pool pump");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
-   }
+  }
   
   // Reset one-shot message flags
   if(PoolData[P_PUMP_AMPS] < 10 && tf_highAmps == true)  // Reset high amps flag
@@ -567,7 +573,6 @@ int SendTweet(char * txtTweet, double fpoolTime)
 bool SendDataToXively()
 {
   
-  char textForXively[17+1];  // Used by dtostrf() & controllerStatus()
   
   if (gotNewData == true)
   {
@@ -619,8 +624,9 @@ bool SendDataToXively()
   }
   else
   {
-    controllerStatus(textForXively,  PoolData[P_CONTROLLER_STATUS]);  // Convert controller status number to text
-    datastreams[10].setBuffer(textForXively);                           // 10 - Controller status - sends text to Xively, not numbers
+    char txtStatus[statusBufLen];  // text buffer for controller status
+    controllerStatus(txtStatus,  PoolData[P_CONTROLLER_STATUS]);  // Convert controller status number to text
+    datastreams[10].setBuffer(txtStatus);                           // 10 - Controller status - sends text to Xively, not numbers
   }
   
   datastreams[11].setInt(successes); // 11 - network successes
@@ -743,7 +749,7 @@ bool ReadXBeeData(uint16_t *Tx_Id)
     {
       // Got a Response, but not RX_16_RESPONSE
       #ifdef PRINT_DEBUG
-            Serial.println(F("Got XBee Response, but not RX_16_RESPONSE"));
+        Serial.println(F("Got XBee Response, but not RX_16_RESPONSE"));
       #endif
       flashLed(LED_XBEE_ERROR, 1, 150);
       xbeeErrors++;
@@ -824,10 +830,11 @@ void PrintPoolData()
 
 //=========================================================================================================
 // Return the text for the pool controller status
+// Longest text: 20 characters
 //=========================================================================================================
 void controllerStatus(char * txtStatus, int poolstatus)
 {
-  // txtStatus can hold 15 characters
+  // txtStatus can hold 25 characters
   
   switch(poolstatus)
   {

@@ -1,52 +1,42 @@
 /*
- To Do
- Add reset button
- Add temp sensor
- Accelerometer has 10k pullups on the I2C lines, you may not need the external ones you put on.
- On/Off switch
+To Do
+Add reset button
+Add temp sensor
+Accelerometer has 10k pullups on the I2C lines, you may not need the external ones you put on.
+On/Off switch
+
+Pool water Level detector with PanStamp
+Want low power consumption, put PanStamp in sleep mode, wake up every 8 seconds to test for water level
+
+Hardware
+panStamp  http://www.panstamp.com/
+MMA8452Q Accelerometer https://www.sparkfun.com/products/10955
+pullup resistors for I2C
+Float switch McMaster 50195K93
+
+MMA8452Q Accelerometer
+Data sheet: http://dlnmh9ip6v2uc.cloudfront.net/datasheets/Sensors/Accelerometers/MMA8452Q.pdf
+You can reduce power consumption by putting it in low power mode.  Also the slower the sampling rate (ODR) the less power.  See tables on pg 7 of the data sheet
+ODR ranges from 800 Hz (default) to 1.56 Hz.  See table 55 on pg 38 for register settings.
+To put in low power mode, set bits 0 and 1 in register CTRL_REG2.  See table 57 on pg 39
+To set ODR to 100 Hz in CTRL_REG1  set bit 3 = 1, bit 4 = 1, bit 5 = 0.
+To set low power mode (MODS=11) in CTRL_REG2 set bits 0 = 1, bit 1 = 1
+
+PanStamp packet structure
+byte 0: Rx ID - ID of Rx panStamp
+byte 1: Tx ID - ID of Tx panStamp
+byte 2: bytes panstamp is sent
+byte 3: Low water detected, low for two minutes. True = Low Water, False = water okay
+byte 4: low water sensor in real time: True = Low water, False = water okay
+byte 5: Level Lid: false - lid is not level
+byte 6,7: Accelerometer x-axis value
+byte 8,9: Accelerometer y-axis value
+byte 10,11: Accelerometer z-axis value
+byte 12,13: Battery volts
+byte 14: Temperature (future)
+byte 15: Humidity (future)
+byte 16: Water leaking inside sensor (future)
  
- Pool water Level detector with PanStamp
- Want low power consumption, put PanStamp in sleep mode, wake up every 8 seconds to test for water level
- 
- Hardware
- panStamp  http://www.panstamp.com/
- MMA8452Q Accelerometer https://www.sparkfun.com/products/10955
- pullup resistors for I2C
- Float switch McMaster 50195K93
- 
- MMA8452Q Accelerometer
- Data sheet: http://dlnmh9ip6v2uc.cloudfront.net/datasheets/Sensors/Accelerometers/MMA8452Q.pdf
- You can reduce power consumption by putting it in low power mode.  Also the slower the sampling rate (ODR) the less power.  See tables on pg 7 of the data sheet
- ODR ranges from 800 Hz (default) to 1.56 Hz.  See table 55 on pg 38 for register settings.
- To put in low power mode, set bits 0 and 1 in register CTRL_REG2.  See table 57 on pg 39
- To set ODR to 100 Hz in CTRL_REG1  set bit 3 = 1, bit 4 = 1, bit 5 = 0.
- To set low power mode (MODS=11) in CTRL_REG2 set bits 0 = 1, bit 1 = 1
- 
- PanStamp packet structure
- byte 0: Rx ID - ID of Rx panStamp
- byte 1: Tx ID - ID of Tx panStamp
- byte 2: bytes panstamp is sent
- byte 3: Low water detected, low for two minutes. True = Low Water, False = water okay
- byte 4: low water sensor in real time: True = Low Water, False = water okay
- byte 5: Level Lid: false - lid is not level
- byte 6: Battery volts LSB
- byte 7: Battery volts MSB
- 
- panStamp Pinout
- 
- ANT
- GND         GND
- D8          GND
- D9          D7
- A0          D6
- A1          D5
- A2          D4
- GND         D3
- A3          D1
- A4 SCA      D0
- A5 SCL      GND
- A6          VCC
- A7          RST
  */
 
 // #define PRINT_DEBUG // comment out to turn off printing
@@ -82,11 +72,16 @@ bool waterIsLow = false;   // This is set if level is low for a few minutes
 #define CTRL_REG2       0x2B // for low power mode, set CTRL_REG2 bits 0 and 1 to high  Ref: http://www.freescale.com/files/sensors/doc/app_note/AN4075.pdf
 #define GSCALE             2 // Sets full-scale range to +/-2, 4, or 8g. Used to calc real g values.
 
+
+bool isAccelOnline = false; // flag to indicate if accelerometer is online
+int accelCount[3];  // Stores the 12-bit signed value
+
+
 // Function Prototypes
 bool IsLidFlat();
 unsigned int readVcc();
 void readAccelData(int *destination);
-void initMMA8452();
+bool initMMA8452();
 void MMA8452Standby();
 void MMA8452Active();
 void MMA8452LowPower();
@@ -107,20 +102,19 @@ void setup()
   cc1101.setSyncWord(&psNetworkAddress, false);   // true saves address to EEPROM
   cc1101.setDevAddress(psSenderAddress, false);   // true saves address to EEPROM
   
-  initMMA8452(); // Intialize the MMA8452Q Accelerometer
+  isAccelOnline = initMMA8452(); // Intialize the MMA8452Q Accelerometer
   
   lowWaterTimer = millis() + LOWWATERTIME;
   
-#ifdef PRINT_DEBUG
-  Serial.println("Accelerometer enabled");
-  delay(200); // need a delay after printing to prevent garbled data
-#endif // PRINT_DEBUG
+  #ifdef PRINT_DEBUG
+    Serial.println(F("Accelerometer enabled"));
+    delay(200); // need a delay after printing to prevent garbled data
+  #endif // PRINT_DEBUG
   
 } // setup()
 
 void loop()
 {
- 
   static uint16_t batteryOld; // used previous battery reading if current one is invalid
   
   if( digitalRead(WATERLEVELSENSOR) == LOWATER && IsLidFlat() == true)
@@ -137,12 +131,14 @@ void loop()
     lowWaterTimer = millis() + LOWWATERTIME;
     waterIsLow = false;
   }
-#ifdef PRINT_DEBUG
-  Serial.println("Transmitting data");
-  delay(200); // need a delay after printing to prevent garbled data
-#endif
+  
+  #ifdef PRINT_DEBUG
+    Serial.println("Transmitting data");
+    delay(200); // need a delay after printing to prevent garbled data
+  #endif
+  
   CCPACKET data;
-  data.length = 8;                     // # bytes that make up packet to transmit
+  data.length = 17;                    // # bytes that make up packet to transmit
   data.data[0] = psReceiverAddress;    // Address of panStamp Receiver we are sending too. THIS IS REQUIRED BY THE CC1101 LIBRARY
   data.data[1] = psSenderAddress;      // Address of this panStamp Tx
   data.data[2] = data.length;          // bytes panstamp is sending
@@ -152,28 +148,38 @@ void loop()
   else
   { data.data[4] = false; }
   data.data[5] = IsLidFlat();          // IsLidFlat
+  uint16_t accelRaw;
+
+  data.data[6] = accelCount[0] >> 8 & 0xff;  // x-axis value
+  data.data[7] = accelCount[0] & 0xff;
+  data.data[8] = accelCount[1] >> 8 & 0xff;  // y-axis value
+  data.data[9] = accelCount[1] & 0xff;
+  data.data[10] = accelCount[2] >> 8 & 0xff; // z-axis value
+  data.data[11] = accelCount[2] & 0xff;
+  
   uint16_t battery = readVcc();        // Read battery voltage
   if(battery < 2000)  // 2 volts
   { battery = batteryOld; }  // use old value
   else
   { batteryOld = battery; }  // update old value with current reading
-  data.data[6] = battery >> 8 & 0xff;  // High byte - shift bits 8 places, 0xff masks off the upper 8 bits
-  data.data[7] = battery & 0xff;       // Low byte, just mask off the upper 8 bits
-  
+  data.data[12] = battery >> 8 & 0xff;  // High byte - shift bits 8 places, 0xff masks off the upper 8 bits
+  data.data[13] = battery & 0xff;       // Low byte, just mask off the upper 8 bits
+  // these are placeholders for future use
+  data.data[14] = 0;         // temperature;
+  data.data[15] = 0;         // humidity;
+  data.data[16] = false;     // waterLeak;
   cc1101.sendData(data); // Send out data
   
   panstamp.sleepWd(WDTO_8S);  // Sleep for 8 seconds. millis() doesn't increment while sleeping
   
-}  // end loop()
+}  // loop()
 
 
 // Read the accelerometer and determine if the skimmer lid is flat or not
 // If not it means someone has removed the lid and the level detector should be ignored
 bool IsLidFlat()
 {
-  
   // read accelerometer
-  int accelCount[3];  // Stores the 12-bit signed value
   readAccelData(accelCount);  // Read the x/y/z adc values
   
   if (accelCount[0] > -100 && accelCount[0] < 100 &&
@@ -182,7 +188,7 @@ bool IsLidFlat()
   { return true; }
   else
   { return false; }
-}
+}  // IsLidFlat()
 
 
 // Read battery volts, returned value is in millivolts
@@ -190,15 +196,15 @@ unsigned int readVcc()
 {
   // Read 1.1V reference against AVcc
   // set the reference to Vcc and the measurement to the internal 1.1V reference
-#if defined(__AVR_ATmega32U4__) || defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
-  ADMUX = _BV(REFS0) | _BV(MUX4) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
-#elif defined (__AVR_ATtiny24__) || defined(__AVR_ATtiny44__) || defined(__AVR_ATtiny84__)
-  ADMUX = _BV(MUX5) | _BV(MUX0);
-#elif defined (__AVR_ATtiny25__) || defined(__AVR_ATtiny45__) || defined(__AVR_ATtiny85__)
-  ADMUX = _BV(MUX3) | _BV(MUX2);
-#else
-  ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
-#endif
+  #if defined(__AVR_ATmega32U4__) || defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
+    ADMUX = _BV(REFS0) | _BV(MUX4) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
+  #elif defined (__AVR_ATtiny24__) || defined(__AVR_ATtiny44__) || defined(__AVR_ATtiny84__)
+    ADMUX = _BV(MUX5) | _BV(MUX0);
+  #elif defined (__AVR_ATtiny25__) || defined(__AVR_ATtiny45__) || defined(__AVR_ATtiny85__)
+    ADMUX = _BV(MUX3) | _BV(MUX2);
+  #else
+    ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
+  #endif
   
   delay(2); // Wait for Vref to settle
   ADCSRA |= _BV(ADSC); // Start conversion
@@ -224,8 +230,8 @@ void readAccelData(int *destination)
   // Loop to calculate 12-bit ADC and g value for each axis
   for(int i = 0; i < 3 ; i++)
   {
-    int gCount = (rawData[i*2] << 8) | rawData[(i*2)+1];  //Combine the two 8 bit registers into one 12-bit number
-    gCount >>= 4; //The registers are left align, here we right align the 12-bit integer
+    int gCount = (rawData[i*2] << 8) | rawData[(i*2)+1];  // Combine the two 8 bit registers into one 12-bit number
+    gCount >>= 4; // The registers are left align, here we right align the 12-bit integer
     
     // If the number is negative, we have to make it so manually (no 12-bit data type)
     if (rawData[i*2] > 0x7F)
@@ -234,40 +240,40 @@ void readAccelData(int *destination)
       gCount *= -1;  // Transform into negative 2's complement #
     }
     
-    destination[i] = gCount; //Record this gCount into the 3 int array
+    destination[i] = gCount; // Record this gCount into the 3 int array
   }
-}
+}  // readAccelData()
 
 // Initialize the MMA8452 registers
 // See the many application notes for more info on setting all of these registers:
 // http://www.freescale.com/webapp/sps/site/prod_summary.jsp?code=MMA8452Q
-void initMMA8452()
+bool initMMA8452()
 {
   byte c = readRegister(WHO_AM_I);  // Read WHO_AM_I register
   if (c == 0x2A) // WHO_AM_I should always be 0x2A
   {
-    //    Serial.println("MMA8452Q is online...");
+    // MMA8452Q is online
+    MMA8452Standby();  // Must be in standby to change registers
+    MMA8452LowPower(); // Setup low power.  Added by SRG
+    
+    // Set up the full scale range to 2, 4, or 8g.
+    byte fsr = GSCALE;
+    if(fsr > 8) fsr = 8; //Easy error check
+    fsr >>= 2; // Neat trick, see page 22. 00 = 2G, 01 = 4A, 10 = 8G
+    writeRegister(XYZ_DATA_CFG, fsr);
+    
+    //The default data rate is 800Hz and we don't modify it in this example code
+    
+    MMA8452Active();  // Set to active to start reading
+    return true;
   }
   else
   {
-    //    Serial.print("Could not connect to MMA8452Q: 0x");
-    //    Serial.println(c, HEX);
-    //    while(1) ; // Loop forever if communication doesn't happen
+    // Could not connect to MMA8452Q
+    return false;
   }
   
-  MMA8452Standby();  // Must be in standby to change registers
-  MMA8452LowPower(); // Setup low power.  Added by SRG
-  
-  // Set up the full scale range to 2, 4, or 8g.
-  byte fsr = GSCALE;
-  if(fsr > 8) fsr = 8; //Easy error check
-  fsr >>= 2; // Neat trick, see page 22. 00 = 2G, 01 = 4A, 10 = 8G
-  writeRegister(XYZ_DATA_CFG, fsr);
-  
-  //The default data rate is 800Hz and we don't modify it in this example code
-  
-  MMA8452Active();  // Set to active to start reading
-}
+}  // initMMA8452()
 
 
 // Sets the MMA8452 to standby mode. It must be in standby to change most register settings
@@ -275,7 +281,7 @@ void MMA8452Standby()
 {
   byte c = readRegister(CTRL_REG1);
   writeRegister(CTRL_REG1, c & ~(0x01)); //Clear the active bit to go into standby
-}
+}  // MMA8452Standby()
 
 
 // Sets the MMA8452 to active mode. Needs to be in this mode to output data
@@ -283,7 +289,7 @@ void MMA8452Active()
 {
   byte c = readRegister(CTRL_REG1);
   writeRegister(CTRL_REG1, c | 0x01); //Set the active bit to begin detection
-}
+}  // MMA8452Active()
 
 // Put MMA8452 in low power mode (MODS = 11) and ODR = 100Hz.  Reduces power consumption to 24uA
 // Added by SRG
@@ -300,7 +306,7 @@ void MMA8452LowPower()
   c = readRegister(CTRL_REG2);
   writeRegister(CTRL_REG2, c | 0x03);  // set bit's 0 and 1
   
-}
+}  // MMA8452LowPower()
 
 
 // Read bytesToRead sequentially, starting at addressToRead into the dest byte array
@@ -316,7 +322,7 @@ void readRegisters(byte addressToRead, int bytesToRead, byte * dest)
   
   for(int x = 0 ; x < bytesToRead ; x++)
     dest[x] = Wire.read();
-}
+}  // readRegisters()
 
 // Read a single byte from addressToRead and return it as a byte
 byte readRegister(byte addressToRead)
@@ -329,7 +335,7 @@ byte readRegister(byte addressToRead)
   
   while(!Wire.available()) ; //Wait for the data to come back
   return Wire.read(); //Return this one byte
-}
+}  // readRegister()
 
 // Writes a single byte (dataToWrite) into addressToWrite
 void writeRegister(byte addressToWrite, byte dataToWrite)
@@ -338,4 +344,4 @@ void writeRegister(byte addressToWrite, byte dataToWrite)
   Wire.write(addressToWrite);
   Wire.write(dataToWrite);
   Wire.endTransmission(); //Stop transmitting
-}
+}  // writeRegister()

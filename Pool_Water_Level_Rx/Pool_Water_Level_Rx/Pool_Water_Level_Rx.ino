@@ -5,25 +5,36 @@ PanStamp Level detector Receiver
 Recieves data from sensorl. 
 Acts as I2C slave to send data to main Arduino
 
+ 
 PanStamp packet structure
-byte 0: Rx ID - ID of Rx panStamp 
+byte 0: Rx ID - ID of Rx panStamp
 byte 1: Tx ID - ID of Tx panStamp
 byte 2: bytes panstamp is sent
-byte 3: Low water detected: true/false
-byte 4: low water sensor - real time, True = low water, False - level okay.  Ignores if lid is level
+byte 3: Low water detected, low for two minutes. True = Low Water, False = water okay
+byte 4: low water sensor in real time: True = Low water, False = water okay
 byte 5: Level Lid: false - lid is not level
-byte 6: Battery volts LSB
-byte 7: Battery volts MSB
+byte 6,7: Accelerometer x-axis value
+byte 8,9: Accelerometer y-axis value
+byte 10,11: Accelerometer z-axis value
+byte 12,13: Battery volts
+byte 14: Temperature (future)
+byte 15: Humidity (future)
+byte 16: Water leaking inside sensor (future)
+ 
 
 I2C Packet structure
 byte 0: I2C Slave address
 byte 1: TX panStamp Status: 255 = offline, 0 = online
 byte 2: water level sensor 0 - level ok, 1 - level is low, 2 - sensor offline
 byte 3: Live low water sensor
-byte 4: Level Lid: false - lid is not level
-byte 5: battery voltage LSB
-byte 6: battery voltage MSB
-
+byte 4: Is lid level true/false
+byte 5,6: Accelerometer x-axis value
+byte 7,9: Accelerometer y-axis value
+byte 9,10: Accelerometer z-axis value
+byte 11,12: battery voltage
+byte 13: Temperature (future)
+byte 14: Humidity (future)
+byte 15: Water leaking inside sensor (future)
 */
 
 
@@ -34,7 +45,7 @@ byte 6: battery voltage MSB
 #include <Wire.h>         // Used for I2C
 
 
-// #define PRINT_DEBUG // comment out to turn off serail printing
+// #define PRINT_DEBUG // comment out to turn off serial printing
 
 // The networkAdress of panStamp sender and receiver must be the same
 byte psNetworkAdress =         91;  // Network address for all pool panStamps 
@@ -46,7 +57,7 @@ const byte panStampOK      =    0;  // panStamp is successfully transmitting dat
 uint32_t psTxTimer = 0; 
 #define PSTIMEOUT 120000      // 2 minute timeout for panStamps.  If no connections in 2 minutes, tell master that panStamp is offline
 
-#define I2C_PACKET_LEN 7 // bytes in I2C Packet
+#define I2C_PACKET_LEN 16 // bytes in I2C Packet
 byte I2C_Packet[I2C_PACKET_LEN];   // Array to hold data sent over I2C to main Arduino
 
 CCPACKET packet;  // panStamp data http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/ccpacket.h
@@ -54,8 +65,6 @@ CCPACKET packet;  // panStamp data http://code.google.com/p/panstamp/source/brow
 
 // The connection to the hardware chip CC1101 the RF Chip
 CC1101 cc1101;  // http://code.google.com/p/panstamp/wiki/CC1101class
-
-
 
 
 // flag indicates wireless packet has been received
@@ -136,33 +145,42 @@ void loop()
         char buf[40];
         sprintf(buf, "Received %d bytes from panStamp %d", packet.length, packet.data[1]);
         Serial.println(buf);
-        Serial.print("Rx ID: ");
+        Serial.print(F("Rx ID: "));
         Serial.print(packet.data[0]);
-        Serial.print("   Tx ID: ");
+        Serial.print(F("   Tx ID: "));
         Serial.println(packet.data[1]);
-        Serial.print("Low Water Status: ");
+        Serial.print(F("Low Water Status: "));
         Serial.print(packet.data[3]);
-        Serial.print("   Low Water Real Time: ");
+        Serial.print(F("   Low Water Real Time: "));
         Serial.println(packet.data[4]);
         if (packet.data[5] == true)
-        { Serial.println("Lid is level"); }
+        { Serial.println(F("Lid is level")); }
         else
-        { Serial.println("Lid is not level"); }
-        Serial.print("Battery LSB: ");
-        Serial.print(packet.data[6]);
-        Serial.print("   Battery MSB: ");
-        Serial.println(packet.data[7]);
+        { Serial.println(F("Lid is not level")); }
+        Serial.print(F("Battery LSB: "));
+        Serial.print(packet.data[11);
+        Serial.print(F("   Battery MSB: "));
+        Serial.println(packet.data[12]);
         Serial.println();
       #endif
        
         // Copy data from panStamp packet to I2C packet array
         I2C_Packet[1] = panStampOK;
-        I2C_Packet[2] = packet.data[3];   // Low water level, low for 2 mintues. true - low water, false - water ok
-        I2C_Packet[3] = packet.data[4];   // Low water level, real time. true - low water, false - water ok
-        I2C_Packet[4] = packet.data[5];   // Is Lid Flat: true/false
-        I2C_Packet[5] = packet.data[6];   // Battery voltage
-        I2C_Packet[6] = packet.data[7];   // Battery voltage
-
+        I2C_Packet[2] = packet.data[3];    // Low water level, low for 2 mintues. true - low water, false - water ok
+        I2C_Packet[3] = packet.data[4];    // Low water level, real time. true - low water, false - water ok
+        I2C_Packet[4] = packet.data[5];    // Is Lid Flat: true/false
+        I2C_Packet[5] = packet.data[6];    // Accelerometer x-axis
+        I2C_Packet[6] = packet.data[7];    // Accelerometer x-axis
+        I2C_Packet[7] = packet.data[8];    // Accelerometer y-axis
+        I2C_Packet[8] = packet.data[9];    // Accelerometer y-axis
+        I2C_Packet[9] = packet.data[10];   // Accelerometer x-axis
+        I2C_Packet[10] = packet.data[11];  // Accelerometer x-axis
+        I2C_Packet[11] = packet.data[12];  // Battery voltage
+        I2C_Packet[12] = packet.data[13];  // Battery voltage
+        I2C_Packet[13] = packet.data[14];  // Temperature (future)
+        I2C_Packet[14] = packet.data[15];  // Humidity (future)
+        I2C_Packet[15] = packet.data[16];  // Leak detected in sensor (future)
+                                     
       } // packet is okay
     }  // got packet
     
