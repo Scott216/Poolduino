@@ -31,7 +31,7 @@ public:
   void  setPumpTemp(float temperature);
   float getPumpTemp();
   int   getWaterFillMinutes();
-  uint8_t getStatus();              // inducates statos of pool: pump on, off, alarms etc.
+  uint8_t getStatus();              // indicates status of pool: pump on, off, alarms etc.
   uint8_t getLowPressureCounter();  // Counts pressure fluctuations when pump is starved for water
   
   

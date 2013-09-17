@@ -1,17 +1,16 @@
 /*
- 
- 
+
 
 Features to add:
--change WaterFillTime so it can handle millis rollover
 - web enabled remote shutdown
 - web enabled remote water fill
--Add small LCD screen to display status
--Can you get rid of panStamps and just use xbee for low water level.  You'll need to figure out how to do a low power setup for the xbee
--Replace wire.h library with I2C (if you are keeping panStamp).  Be sure to disable pull-ups on I2C lines  
--Use 3 momentary pushbuttons of On-Off-Auto.  You can use one analog input for all 3 plus water fill.  
+- Can you get rid of panStamps and just use xbee for low water level.  You'll need to figure out how to do a low power setup for the xbee
+- Replace wire.h library with I2C (if you are keeping panStamp).  Be sure to disable pull-ups on I2C lines
+- Use 3 momentary pushbuttons of On-Off-Auto.  You can use one analog input for all 3 plus water fill.
 You can do all all this on A4, which is where water fill input goes now. If you want Auto and On button 
 to light up,  use pins D12 & D13, they are the current inputs to on-off-auto.  Make provision for heater on and pool light on pushbuttons.
+- Turn heater on/off with arduino
+- turn pool light on/off with arduino
 
 
 PCB Ideas

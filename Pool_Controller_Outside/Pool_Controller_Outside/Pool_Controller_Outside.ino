@@ -727,11 +727,16 @@ bool getI2CData()
   {
     gotI2CPacket = false;  // Reset flag
     
-    // if panstamp TX is online, extract data, if not return offline codes
+    // if panStamp TX is online, extract data, if not return offline codes
     if (i2CData[1] == 0 )
     { // water level detector TX is online - low water for 2 minutes
-      sensorStatusbyte |= 1 << 7;   // set water level sensor bit  to indicate sensor is online
+      
       lowWaterLevel = i2CData[2];   // Set global variable, water low for 2 minutes
+      if(lowWaterLevel == levelSensorOffline )
+      { sensorStatusbyte  &= ~(1 << 7); } // water level offline
+      else
+      { sensorStatusbyte |= 1 << 7; }  // set water level sensor bit  to indicate sensor is online
+        
       // set ioStatusbyte bit for water level sensor (real time value)
       if(i2CData[3] == true )
       { ioStatusByte |= 1 << 7; }    // water level is low, set bit
