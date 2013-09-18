@@ -6,11 +6,13 @@ It uses an XBee series 1
 
 
 To do:
-See if you can reduce RAM so you can run on Uno or Leonardo
 Send tweet if lost xbee communication
 See if you can update water added today every minute, not just when it's complete it's cycle
 Don't seem to need xbeeID Tx_Id parameter in xbee function
-Use SD Card to log data
+Create new SD log file every day
+Use time library so arduino knows what time it is - because I want this in the log file
+Create new Xively feed, re-order streams and give them names instead of numbered IDs
+- will need to update alert services
 
 Figure out how to send commands to outside xbee from inside xbee, then see if you can shut pump off from iphone.
 Turn pump off from iphone/website http://www.yaler.org/

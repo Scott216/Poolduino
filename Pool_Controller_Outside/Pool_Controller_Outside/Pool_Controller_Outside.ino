@@ -1,3 +1,6 @@
+// with pre-filter pressure sensor disconnected, ADC reads around 400, 
+// with water fill sensor diconnected, it reads in the 200s
+
 #include "Arduino.h"
 #include "LocalLibrary.h"
 
@@ -12,18 +15,17 @@
 #define PRINT_DEBUG                   // Comment out when done debugging
 
 
-// === Analog I/O ===
-#define PRESSURE1_PIN        0   // Pressure before filter
-#define PRESSURE2_PIN        1   // Pressure after filter
+// === Analog I/O Pins ===
+#define PRESSURE1_PIN        0       // Pressure before filter
+#define PRESSURE2_PIN        1       // Pressure after filter
 #define WATER_FILL_PRESSURE_PIN  5   // Pressure at water fill line.  Transducer can be 0-30 or 0-100 PSI transducer
-#define PUMP_AMPS_PIN        3   // Pump amps input 20 Amp CT
-#define WATER_FILL_PB       A4   // Push-button for water fill, use as digital input - fills water 15 minutes each time it's pressed
+#define PUMP_AMPS_PIN        3       // Pump amps input 20 Amp CT
+#define WATER_FILL_PB       A4       // Push-button for water fill, use as digital input - fills water 15 minutes each time it's pressed
 // A5 not used
 
-// === Digital I/0 ===
-#define XBEE_RX              0   // Communicate with Xbee
-#define XBEE_TX              1   // Communicate with Xbee
-// Leonardo Pins 2 and 3 are used by I2C for the RTC
+// === Digital I/0 Pins ===
+// Pins 0 & 1 are used to communicate with xBee
+// Pins 2 and 3 are used by Lonardo for I2C communication
 // D4 unused
 #define ONE_WIRE_BUS         5   // OneWire temperture sensor bus
 // D6,D7,D8 unused
@@ -34,7 +36,7 @@
 #define PUMP_INPUT_MAN      13   // From On-Off_Auto switch, On Mode
 
 
-
+// Array positions
 #define PRE_HEAT_TEMP        0   // Pre-heater temperature array
 #define POST_HEAT_TEMP       1   // Post-heater temperature array 
 #define PUMP_TEMP            2   // Pump temperature array
@@ -43,21 +45,23 @@
 #define WATER_FILL_PRESSURE  2   // Water fill pressure array
 
 
-#define SENSOR_READ_INTERVAL    250   // Read sensor every 250mS
-#define TX_INTERVAL            2000   // Send data to house every 2 seconds
-#define ACK_RESPONSE_WAIT_TIME  250   // Time (ms) program waits for an ACK response from other XBee. Normal response is about 15mS
-#define PUMP_ON_TIME            7.5   // 7:30 AM
-#define PUMP_OFF_TIME          19.0   // 7:00 PM
-#define PUMP_SWITCH_ON          LOW   // Pump switch is ON when input is LOW, otherwise it's high from the pull-up resistor
-#define XBEE_MY_ADDR_RX       0x250   // The MY address of the Rx XBee
-#define BAUD_RATE              9600   // Baud for bith Xbee and serial monitor
-#define WATER_FILL_BP_MIN    908000   // 15 minutes added to water fill timer
-#define WATER_FILL_PRESS_THRESH  20   // If water fill pressure is > then thershold, you can assume garden hose is connected to water fill
-const byte pressureTransducer = 100;  // Can use either 100 PSI sensor or 30 PSI sensor
-                                      // With 0-30PSI transducer, analog input = 1023 at with valve off, 290 with valve open, 190 with hose diconnected
-#define MAX_WATER_FILL_MINUTES  120   // Maximum number of minutes water can be added each day.  Reset at 11 PM
+#define PUMP_SWITCH_ON   LOW   // Pump switch is ON when input is LOW, otherwise it's high from the pull-up resistor
+
+const uint32_t SENSOR_READ_INTERVAL =    250;  // Read sensor every 250mS
+const uint32_t TX_INTERVAL =            2000;  // Send data to house every 2 seconds
+const uint32_t ACK_RESPONSE_WAIT_TIME =  250;  // Time (mS) program waits for an ACK response from other XBee. Normal response time is about 15mS
+const float PUMP_ON_TIME =               7.5;  // 7:30 AM, Time to turn pump on each day
+const float PUMP_OFF_TIME =             19.0;  // 7:00 PM, Time to turn pump off each day
+#define XBEE_MY_ADDR_RX                0x250   // The MY address of the Rx XBee (don't use const Byte)
+const uint32_t WATER_FILL_BP_MIN =    908000;  // 15 minutes added to water fill timer
+const byte WATER_FILL_PRESS_THRESH =      20;  // If water fill pressure is > then thershold, you can assume garden hose is connected to water fill
+const byte pressureTransducer =          100;  // Can use either 100 PSI sensor or 30 PSI sensor
+                                               // With 0-30PSI transducer, analog input = 1023 at with valve off, 290 with valve open, 190 with hose diconnected
+const byte MAX_WATER_FILL_MINUTES =      120;  // Maximum number of minutes water can be added each day.  Reset at 11 PM
+
 
 // Status code to send to inside Arduino
+// Indicated current state of poolc controller
 byte poolStatus;
 const byte  statusPumpOff =              0;
 const byte  statusPumpOn =               1;
@@ -67,18 +71,18 @@ const byte  statusEmergencyLoPresFluct = 4;  // low pressure because of fluctuat
 const byte  statusEmergencyLoPresCont =  5;  // continious low pressure for 5 mintutes
 const byte  statusEmergencyHiAmps =      6;
 const byte  statusEmergencyHiPumpTemp =  7;
-const byte  statusShutdnFromWeb =        8;
+const byte  statusShutdnFromWeb =        8;  // future use
 
 byte lowWaterLevel = 0;             // Water level ok = 0, water level low = 1, sensor offline = 2
 const byte levelIsLow = 1;          // Water level is low
 const byte levelSensorOffline = 2;  // Water level is offline
-uint16_t levelSensorVolts = 0;      // Battery voltage for level sensor
+uint16_t levelSensorMilliVolts = 0; // Battery voltage for level sensor
 
 // Initialize Real Time Clock
 RTC_DS1307 RTC;
 
-#define addrSlaveI2C    21  // I2C Slave address of RX panStamp
-#define I2C_PACKET_SIZE 16  // I2C Packet size
+const byte addrSlaveI2C =    21;  // I2C Slave address of RX panStamp
+const byte I2C_PACKET_SIZE = 16;  // I2C Packet size
 
 
 // Initialize OneWire temp sensors
@@ -95,47 +99,54 @@ static uint8_t tempSensors[3][8] =
 // Intialize Xbee object
 XBee xbee = XBee();
 #define NUM_DATA_PTS   16  // Number of integers (data points) to upload. Can't exceed 100 bytes or 50 integers unless you change MAX_FRAME_DATA_SIZE in XBee.h
-/* XBee packet structure
- 0 Temp Pre Heater
- 1 Temp Post Heater
- 2 Temp Pump houseing
- 3 Pump Amps
- 4 Pressure pre-filter
- 5 Pressure post filter
- 6 Pressure Water Fill
- 7 Low pressure counter
- 8 Controller Status Number
- 9 Minutes of water added today
- 10 Water fill countdown
- 11 Pool time
- 12 Water level sensor battery voltage
- 13 Low Water Level - calculated
- 14 Sensor Input Status Byte
- 15 Dicrete I/O status byte
+
+/* 
+XBee packet structure
+------------------------
+0 Temp Pre Heater
+1 Temp Post Heater
+2 Temp Pump houseing
+3 Pump Amps
+4 Pressure pre-filter
+5 Pressure post filter
+6 Pressure Water Fill
+7 Low pressure counter
+8 Controller Status Number
+9 Minutes of water added today
+10 Water fill countdown
+11 Pool time
+12 Water level sensor battery voltage
+13 Low Water Level - calculated
+14 Sensor Input Status Byte
+15 Dicrete I/O status byte
+
+Sensors status byte
+1 if sensor is working properly, 0 of not
+------------------------------------------
+sensorStatusbyte
+0 Pre-heat temperature
+1 Post-heat temperature
+2 Pump temperature
+3 Pre-filter pressure
+4 Post-filter pressure
+5 Water fill pressure
+6 pump amps
+7 Water level sensor
+
+Discrete I/O status byte
+shows on/off state if I/O
+---------------------------
+ioStatusByte
+0 Pump on/off relay
+1 Auto-Off-On switch is in Auto Position
+2 Auto-Off-On switch is in On Position
+3 Water fill LED
+4 Water fill pushbutton input
+5 Water fill valve relay
+6 Heater on/off relay output
+7 Water Level Sensor (real time)
  
- Sensors working ok Status Byte: 1 if sensor is working properly, 0 of not
- sensorStatusbyte
- 0 Pre-heat temperature
- 1 Post-heat temperature
- 2 Pump temperature
- 3 Pre-filter pressure
- 4 Post-filter pressure
- 5 Water fill pressure
- 6 pump amps
- 7 Water level sensor
- 
- Discrete I/O status byte: shows on/off state if I/O
- ioStatusByte
- 0 Pump on/off relay
- 1 Auto-Off-On switch is in Auto Position
- 2 Auto-Off-On switch is in On Position
- 3 Water fill LED
- 4 Water fill pushbutton input
- 5 Water fill valve relay
- 6 Heater on/off relay output
- 7 Water Level Sensor (real time)
- 
- */
+*/
 
 // Allocate array to hold bytes to send to other xbee.  Size is 2x the number if integers being sent
 uint8_t xbeePayload[NUM_DATA_PTS * 2];
@@ -143,7 +154,7 @@ uint8_t xbeePayload[NUM_DATA_PTS * 2];
 Tx16Request tx = Tx16Request(XBEE_MY_ADDR_RX, xbeePayload, sizeof(xbeePayload));
 TxStatusResponse txStatus = TxStatusResponse();
 
-uint32_t WaterFillTime;       // Timer to turn on water fill valve, adds 15 minutes every time pushbutton is pressed
+uint32_t WaterFillTimer;       // Timer to turn on water fill valve, adds 15 minutes every time pushbutton is pressed
 byte    EmergencyShutdown;    // shuts down pump if there a problem.  0 = OK, 1 = low pressure, 2 = high amps, 3= high pump temperature
 bool    presFluctResetFlag;   // Reset when pressure goes back to normal.  Used in conjunction with counter
 // bool    startupLowPressFlag;  // used to detect low pressure when pump start up in the morning.  SRG Wont need after water level sensor is installed
@@ -151,7 +162,7 @@ bool    presFluctResetFlag;   // Reset when pressure goes back to normal.  Used 
 // Setup pushbutton for water fill.  Input goes low when pressed.
 Button btnWaterFill = Button(WATER_FILL_PB, LOW);
 
-bool waterFillOnTrigger;       // One shot trigger when water fill valve is turned on
+bool waterFillOnTrigger;      // One shot trigger when water fill valve is turned on
 byte sensorStatusbyte;        // Each bit determines if sensor is operating properly
 byte ioStatusByte;            // I/O state of digital I/O
 int16_t xbeeData[NUM_DATA_PTS];  // Array to hold integers that will be sent to other xbee
@@ -176,7 +187,7 @@ void setup ()
 {
   
 #ifdef PRINT_DEBUG
-  Serial.begin(BAUD_RATE);
+  Serial.begin(9600);
 #endif
   
   pinMode(PUMP_OUTPUT,       OUTPUT);
@@ -192,7 +203,7 @@ void setup ()
   digitalWrite(WATER_OUTPUT,      LOW);
   
   // start serial
-  xbee.begin(BAUD_RATE);
+  xbee.begin(9600);
   
   // Initialize I2C library - for panStamp communication and RTC
   Wire.begin();
@@ -214,7 +225,7 @@ void setup ()
   // line out and upload again.
   // RTC.adjust(DateTime(__DATE__, __TIME__));
   
-  WaterFillTime = millis();
+  WaterFillTimer = millis();
   waterFillOnTrigger = false;
   EmergencyShutdown = 0; // everything okay
   poolStatus = statusPumpOff;
@@ -251,7 +262,7 @@ void loop ()
   // Combine hours and minutes into a decimal. i.e. 2:15:00 PM = 14.25
   if ((long)(millis() - ReadTime) >= 0 )
   {
-    ReadTime = millis() + 15000;
+    ReadTime = millis() + 15000UL;
     DateTime now = RTC.now();  // Gets the current time
     poolTime = (float) now.hour() + ((float) now.minute() / 60.0);
   }
@@ -263,7 +274,7 @@ void loop ()
      digitalRead(WATER_OUTPUT) == LOW &&
      lowWaterLevel == levelIsLow &&
      waterAddedToday <= MAX_WATER_FILL_MINUTES)
-  { WaterFillTime = millis() + WATER_FILL_BP_MIN; }
+  { WaterFillTimer = millis() + WATER_FILL_BP_MIN; }
   
   
   // Check for water fill pushbutton
@@ -273,27 +284,27 @@ void loop ()
     waterFillResetTime = millis();  // Used to time how long button is pressed, used for 2 second reset of water fill timer
     
     // Add time to water fill timer
-    if(WaterFillTime <= millis() && pressure[WATER_FILL_PRESSURE] > WATER_FILL_PRESS_THRESH && digitalRead(WATER_OUTPUT) == LOW)  // need to check for pressure here becuse if valve is already open, pressure will be low
+    if(WaterFillTimer <= millis() && pressure[WATER_FILL_PRESSURE] > WATER_FILL_PRESS_THRESH && digitalRead(WATER_OUTPUT) == LOW)  // need to check for pressure here becuse if valve is already open, pressure will be low
     { // water fill is off, add 15 minutes to timer
-      WaterFillTime = millis() + WATER_FILL_BP_MIN;  // First time button is pushed, add 15 minutes to timer
+      WaterFillTimer = millis() + WATER_FILL_BP_MIN;  // First time button is pushed, add 15 minutes to timer
     }
     else if(digitalRead(WATER_OUTPUT) == HIGH)
     { // Water fill is already on, add another 15 minutes. Don't check water fill pressure because it will be low since valve is already open
-      WaterFillTime += WATER_FILL_BP_MIN;          // Timer is already on (because output is on), add 15 more minutes
+      WaterFillTimer += WATER_FILL_BP_MIN;          // Timer is already on (because output is on), add 15 more minutes
     }
     debounceTimer = millis() + 200;
   }
-  
+
   // If button is held down for more then 2 seconds turn off water fill
   // The (waterFillResetTime > 0) statement prevents if statment from being true when arduino first boots up.
   // On bootup the .onRelease() returns true, even though button hasn't been pushed
-  if(btnWaterFill.onRelease() && (millis() - waterFillResetTime) > 2000  && waterFillResetTime > 0)
+  if(btnWaterFill.onRelease() && (millis() - waterFillResetTime) > 2000UL  && waterFillResetTime > 0)
   {
-    WaterFillTime = millis();
+    WaterFillTimer = millis();
   }
-  
+
   // Turn on water fill valve
-  if(((long)(millis() - WaterFillTime) < 0) && (waterAddedToday < MAX_WATER_FILL_MINUTES))
+  if(((long)(millis() - WaterFillTimer) < 0) && (waterAddedToday < MAX_WATER_FILL_MINUTES))
   {
     digitalWrite(WATER_OUTPUT, HIGH);
     if(poolStatus <= statusAddingWater)
@@ -355,7 +366,7 @@ void loop ()
      waterAddedToday < MAX_WATER_FILL_MINUTES &&
      pressure[WATER_FILL_PRESSURE] > WATER_FILL_PRESS_THRESH )
   {
-    WaterFillTime = millis() + (2 * WATER_FILL_BP_MIN);  // Add water for 30 minutes
+    WaterFillTimer = millis() + (2 * WATER_FILL_BP_MIN);  // Add water for 30 minutes
     presFluctCounter = 0;  // Reset low pressure counter; counter won't count up when water fill valve is on
     presFluctResetFlag == false;  // set to false so counter has chance to start again. If pressure never gets above 15, it won't reset
   }
@@ -482,7 +493,7 @@ void loop ()
     pressure[PRE_FILTER_PRESSURE] = (Smoothing * newPressure) + ((1.0 - Smoothing) *  pressure[PRE_FILTER_PRESSURE]);
     
     newPressure = 0.0359 * (float) analogRead(PRESSURE2_PIN) - 6.2548;
-    if (newPressure < 0.7)  // if pressure is near zero, set to zero
+    if (newPressure < 0.8)  // if pressure is near zero, set to zero
     { newPressure = 0.0; }
     
     pressure[POST_FILTER_PRESSURE] = (Smoothing * newPressure) + ((1.0 - Smoothing) *  pressure[POST_FILTER_PRESSURE]);
@@ -511,54 +522,62 @@ void loop ()
     // Validate sensor data and set sensorStatusbyte
     // -----------------------------------------------
     if (temperature[PRE_HEAT_TEMP] < 50 || temperature[PRE_HEAT_TEMP] > 180)
-     { sensorStatusbyte  &= ~(1 << 0); }  // Invalid pre-heat temperature, something wrong with sensor
+    { sensorStatusbyte  &= ~(1 << 0); }  // Invalid pre-heat temperature, something wrong with sensor
     else
-     { sensorStatusbyte |= 1 << 0; }  // pre-heat temperature within acceptable range
+    { sensorStatusbyte |= 1 << 0; }  // pre-heat temperature within acceptable range
     
     if (temperature[POST_HEAT_TEMP] < 50 || temperature[POST_HEAT_TEMP] > 180)
-     { sensorStatusbyte  &= ~(1 << 1); }  // Invalid post-heat temperature, something wrong with sensor
+    { sensorStatusbyte  &= ~(1 << 1); }  // Invalid post-heat temperature, something wrong with sensor
     else
-     { sensorStatusbyte |= 1 << 1; }  // post-heat temperature within acceptable range
+    { sensorStatusbyte |= 1 << 1; }  // post-heat temperature within acceptable range
     
     if (temperature[PUMP_TEMP] < 40 || temperature[PUMP_TEMP] > 300)
-     { sensorStatusbyte  &= ~(1 << 2); }  // Invalid temp range, something wrong with sensor
+    { sensorStatusbyte  &= ~(1 << 2); }  // Invalid temp range, something wrong with sensor
     else
-     { sensorStatusbyte |= 1 << 2; }  // valid temp range
+    { sensorStatusbyte |= 1 << 2; }  // valid temp range
     
     // Pre filter pressure
     // If pump is on and pressure2 is okay (>5), but higher then pressure1, then there is a problem with presssure1 (pre-filter)
     if (digitalRead(PUMP_OUTPUT) == HIGH && pressure[POST_FILTER_PRESSURE] > 5 && pressure[POST_FILTER_PRESSURE] > pressure[PRE_FILTER_PRESSURE])
-     { sensorStatusbyte  &= ~(1 << 3); }  // Invalid pre-filter pressure
+    { sensorStatusbyte  &= ~(1 << 3); }  // Invalid pre-filter pressure
     else
-     { sensorStatusbyte |= 1 << 3; }  // valid pre-filter pressure range
+    { sensorStatusbyte |= 1 << 3; }  // valid pre-filter pressure range
     
+    // see if sensor is working, ADC value should neve be below about 200
+    if (analogRead(PRESSURE1_PIN) < 100 )
+    { sensorStatusbyte  &= ~(1 << 3); }  // Problem with sensor
+
     // Post filter pressure
     // If pump is on and pre-filter pressure is okay, but post filter pressure is low, then there is problem with sensor
     // Note - when discharging water to waste, this will cause pressure2 to show an problem
     if (digitalRead(PUMP_OUTPUT) == HIGH && pressure[PRE_FILTER_PRESSURE] > 10 && pressure[POST_FILTER_PRESSURE] < 4)
-     { sensorStatusbyte  &= ~(1 << 4); }  // Invalid pressure
+    { sensorStatusbyte  &= ~(1 << 4); }  // Invalid pressure
     else
-     { sensorStatusbyte |= 1 << 4; }  // valid pressure range
-    
+    { sensorStatusbyte |= 1 << 4; }  // valid pressure range
+
+    // see if sensor is working, ADC value should neve be below about 200
+    if (analogRead(PRESSURE2_PIN) < 100 )
+    { sensorStatusbyte  &= ~(1 << 4); }  // Problem with sensor,
+
     // water fill pressure
     // Sensor outputs 1-5 volts, so min ADC should be about 200, so if it's less then 100, there is definitely a problem
     if(analogRead(WATER_FILL_PRESSURE_PIN) < 100)
-     { sensorStatusbyte  &= ~(1 << 5); } // Sensor failed (0)
+    { sensorStatusbyte  &= ~(1 << 5); } // Sensor failed (0)
     else
-     { sensorStatusbyte |= 1 << 5; }     // sensor ok (1)
+    { sensorStatusbyte |= 1 << 5; }     // sensor ok (1)
     
     // Pump Amps
     // if pump is on but amps are low, there is a problem with sensor (or pump)
     if (digitalRead(PUMP_OUTPUT) == HIGH && PumpAmps < 4 )
-     { sensorStatusbyte  &= ~(1 << 6); }  // Invalid pump amps
+    { sensorStatusbyte  &= ~(1 << 6); }  // Invalid pump amps
     else
-     { sensorStatusbyte |= 1 << 6; }     // pump amps okay
+    { sensorStatusbyte |= 1 << 6; }     // pump amps okay
     
     // if pump is off but amps are high, there is a problem with sensor (or pump)
     if (digitalRead(PUMP_OUTPUT) == LOW && PumpAmps > 3)
-     { sensorStatusbyte  &= ~(1 << 6); }  // Invalid pump amps
+    { sensorStatusbyte  &= ~(1 << 6); }  // Invalid pump amps
     else
-     { sensorStatusbyte |= 1 << 6; } // pump amps okay
+    { sensorStatusbyte |= 1 << 6; } // pump amps okay
     
     // Water level sensor is set in getI2CData()
 
@@ -640,26 +659,26 @@ bool sendXbeeData()
   xbeeData[4] = (int) (pressure[PRE_FILTER_PRESSURE]  * 10.0);
   xbeeData[5] = (int) (pressure[POST_FILTER_PRESSURE] * 10.0);
   xbeeData[6] = (int) (pressure[WATER_FILL_PRESSURE]  * 10.0);
-  xbeeData[7] = presFluctCounter      * 10;  // counts low pressure fluctuations, means water level is low or leaves in filter
-  xbeeData[8] = (int) (poolStatus     * 10);
-  xbeeData[9] = (int) (waterAddedToday * 10);  // Number of minutes fill water valve was open
-  if (WaterFillTime > millis())  // send water fill countdown to xBee.  If timer is not running, send zero
-   { xbeeData[10] = ((WaterFillTime - millis()) / 6000.0); }
+  xbeeData[7] = presFluctCounter                      * 10;  // counts low pressure fluctuations, means water level is low or leaves in filter
+  xbeeData[8] = (int) (poolStatus                     * 10);
+  xbeeData[9] = (int) (waterAddedToday                * 10);  // Number of minutes fill water valve was open
+  if (WaterFillTimer > millis())  // send water fill countdown to xBee.  If timer is not running, send zero
+  { xbeeData[10] = ((WaterFillTimer - millis()) / 6000.0); }
   else
-   { xbeeData[10] = 0; }
-  xbeeData[11] = (int) (poolTime * 10.0);
-  xbeeData[12] = (int) (levelSensorVolts * 10.0);  // battery volts (in mV) for water level sensor
-  xbeeData[13] = (int) lowWaterLevel    * 10.0;
-  xbeeData[14] = (int) sensorStatusbyte * 10.0;
-  xbeeData[15] = (int) ioStatusByte     * 10.0;
+  { xbeeData[10] = 0; }
+  xbeeData[11] = (int) (poolTime *              10.0);
+  xbeeData[12] = (int) (levelSensorMilliVolts * 10.0);  // battery volts (in mV) for water level sensor
+  xbeeData[13] = (int) (lowWaterLevel         * 10.0);
+  xbeeData[14] = (int) (sensorStatusbyte      * 10.0);
+  xbeeData[15] = (int) (ioStatusByte          * 10.0);
   
   // Transmit data
   // break down integers into two bytes and place in payload
   for(int i=0; i < NUM_DATA_PTS; i++)
-   {
+  {
     xbeePayload[i*2]     = xbeeData[i] >> 8 & 0xff; // High byte - shift bits 8 places, 0xff masks off the upper 8 bits
     xbeePayload[(i*2)+1] = xbeeData[i] & 0xff;      // low byte, just mask off the upper 8 bits
-   }
+  }
   xbee.send(tx);
   
   // after sending a tx request, we expect a status response
@@ -746,15 +765,15 @@ bool getI2CData()
       // Level Lid - i2CData[4] - not used by anything in this sketch
       
       // Battery voltage
-      levelSensorVolts = i2CData[11] << 8;
-      levelSensorVolts |= i2CData[12];
+      levelSensorMilliVolts = i2CData[11] << 8;
+      levelSensorMilliVolts |= i2CData[12];
       
     }
     else
     { // water level detector TX is offline
       sensorStatusbyte  &= ~(1 << 7);  // clear water level sensor bit to indicate sensor is offline
       lowWaterLevel = levelSensorOffline;  // 0 - level ok, 1 - level low, 2 - offline
-      levelSensorVolts = 0;
+      levelSensorMilliVolts = 0;
     }
     return true;
   }  // end if(gotI2CPacket)
@@ -779,11 +798,13 @@ void printDebugFunction()
   Serial.print("\t");
   Serial.print(pressure[WATER_FILL_PRESSURE]);
   Serial.print("\t");
+  Serial.print(analogRead(PRESSURE1_PIN));
+  Serial.print("\t");
   Serial.print(pressure[PRE_FILTER_PRESSURE]);
   Serial.print("\t");
-  Serial.print(pressure[POST_FILTER_PRESSURE]);
+  Serial.print(analogRead(PRESSURE2_PIN));
   Serial.print("\t");
-  Serial.print(presFluctCounter);
+  Serial.print(pressure[POST_FILTER_PRESSURE]);
   Serial.print("\t");
   Serial.print(poolStatus);
   Serial.println();

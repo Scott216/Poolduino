@@ -2,21 +2,51 @@
  Xively Feed: http://xively.com/feeds/65673/workbench
  
  Xbee Shield switch: to upload sketch, slide switch away from edge
+
+SD Card: 
+http://arduino.cc/en/Reference/SD
+http://arduino.cc/en/Reference/SDCardNotes
+http://arduino.cc/en/Tutorial/Datalogger - log data to file
+http://arduino.cc/en/Tutorial/Files - create a new file
+http://code.google.com/p/sdfatlib/
+http://code.google.com/p/fat16lib/ - minimal implementation of the FAT16 file
+http://www.ladyada.net/learn/arduino/ethfiles.html - tutorial using ethernet and SD Card together, doesn't seem applicable to me
+http://learn.adafruit.com/adafruit-data-logger-shield/for-the-mega-and-leonardo
+
+
+
+Format FAT 16
+File name format: 8.3
+Data is not saved until you use flush() or close()
+Etherenet shield uses pin 4 for SD Card
+SD.begin(4); // initialize SD Card
+
+turn off ethernet when using SD Card:
+digitalWrite(53, HIGH); 
+
+
+The Arduino SPI pins are:
+SPI  Uno  Mega
+SS    10   53
+MOSI  11   51
+MISO  12   50
+SCK   13   52
+
  
- */
+*/
 
 #define PRINT_DEBUG     // Comment out to turn off serial printing
 
 #include <SPI.h>             // Communicate with SPI devices http://arduino.cc/en/Reference/SPI
 #include <Ethernet.h>        // LIbrary for Arduino ethernet shield http://arduino.cc/en/Reference/Ethernet
 #include <HttpClient.h>      // https://github.com/amcewen/HttpClient/blob/master/HttpClient.h
+#include <SD.h>              // Micro SD Card. http://arduino.cc/en/Reference/SD
 #include <Xively.h>          // http://github.com/xively/xively_arduino
 #include <Twitter.h>         // http://arduino.cc/playground/Code/TwitterLibrary, get token from token at http://arduino-tweet.appspot.com/
 #include <XBee.h>            // http://code.google.com/p/xbee-arduino/     Modified per http://arduino.cc/forum/index.php/topic,111354.0.html
 #include <Tokens.h>          // Tokens for Xively and twitter
 #include "LocalLibrary.h"    // Include application, user and local libraries
 
-#define BAUD_RATE 9600  // Baud for bith Xbee and serial monitor
 
 // Array positions for pool data array PoolData[]
 #define P_TEMP1               0   // Temperature before heater
@@ -65,28 +95,12 @@ byte ioStatusbyte;              // Each bit shows input value of digital I/O
  */
 
 // Xively Stream IDs
-#define STREAM_PRESSURE1           "0"   // Pressure before filter
-#define STREAM_PRESSURE2           "1"   // Pressure after filter
-#define STREAM_PRESSURE3           "2"   // Water Fill Pressure
-#define STREAM_TEMP1               "3"   // Temp before heater
-#define STREAM_TEMP2               "4"   // Temp after heater
-#define STREAM_HTR_STATUS          "5"   // Heater On/Off Status
-#define STREAM_TEMP_PUMP           "6"   // Pump housing temperature
-#define STREAM_PUMP_AMPS           "7"   // Pump amps
-#define STREAM_LOW_PRES_CNT        "8"   // Low Pressure Count
-#define STREAM_FILL_MINUTES        "9"   // Minutes water fill valve was otpen today
-#define STREAM_CTRL_STATUS_TXT    "10"   // Status of controller - text
-#define STREAM_SUCCESS            "11"   // Xively upload successes
-#define STREAM_FAILURE            "12"   // Xively Network Failures
-#define STREAM_CTRL_STATUS_CODE   "13"   // Status of controller - number
-#define STREAM_LEVEL_SENSOR       "14"   // Water level sensor
-#define STREAM_BATTERY            "15"   // battery volts for water level sensor
-#define NUM_XIVELY_STREAMS         16
+#define NUM_XIVELY_STREAMS  16
 
-#define TWEETMAXSIZE              60   // Character array size for twitter message
-#define XIVELY_UPDATE_INTERVAL   15000   // Xively upload interval (mS)
-#define XIVELY_UPDATE_TIMEOUT  1800000   // 30 minute timeout - if there are no successful updates in 30 minutes, reboot
-#define FEED_ID 65673                  // Xively Feed ID http://xively.com/feeds/65673/workbench
+const byte TWEETMAXSIZE =                   60;   // Character array size for twitter message
+const uint32_t XIVELY_UPDATE_INTERVAL =  15000;   // Xively upload interval (mS)
+const uint32_t XIVELY_UPDATE_TIMEOUT = 1800000;   // 30 minute timeout - if there are no successful updates in 30 minutes, reboot
+#define FEED_ID                  65673   // Xively Feed ID http://xively.com/feeds/65673/workbench
 // #define FEED_ID 4663  // Test feed
 uint32_t xively_uploadTimout_timer; // Timer to reboot if no successful uploads in 30 minutes
 uint32_t xively_Upload_Timer;       // Timer for uploading to Xively
@@ -96,24 +110,26 @@ char bufferValue[bufferSize]; // enough space to store the string we're going to
 
 const byte statusBufLen = 26;  // character buffer length for controller status text
 
+// format is XivelyDatastream(stream name text, lenght of text, variable type: DATASTREAM_FLOAT, DATASTREAM_INT)
+// for text format is XivelyDatastream(stream name text, lenght of text, variable type: DATASTREAM_BUFFER, bufferValue, bufferSize )
 XivelyDatastream datastreams[] =
 {
-  XivelyDatastream(STREAM_PRESSURE1,        strlen(STREAM_PRESSURE1),        DATASTREAM_FLOAT),
-  XivelyDatastream(STREAM_PRESSURE2,        strlen(STREAM_PRESSURE2),        DATASTREAM_FLOAT),
-  XivelyDatastream(STREAM_PRESSURE3,        strlen(STREAM_PRESSURE3),        DATASTREAM_FLOAT),
-  XivelyDatastream(STREAM_TEMP1,            strlen(STREAM_TEMP1),            DATASTREAM_FLOAT),
-  XivelyDatastream(STREAM_TEMP2,            strlen(STREAM_TEMP2),            DATASTREAM_FLOAT),
-  XivelyDatastream(STREAM_HTR_STATUS,       strlen(STREAM_HTR_STATUS),       DATASTREAM_INT),
-  XivelyDatastream(STREAM_TEMP_PUMP,        strlen(STREAM_TEMP_PUMP),        DATASTREAM_FLOAT),
-  XivelyDatastream(STREAM_PUMP_AMPS,        strlen(STREAM_PUMP_AMPS),        DATASTREAM_FLOAT),
-  XivelyDatastream(STREAM_LOW_PRES_CNT,     strlen(STREAM_LOW_PRES_CNT),     DATASTREAM_INT),
-  XivelyDatastream(STREAM_FILL_MINUTES,     strlen(STREAM_FILL_MINUTES),     DATASTREAM_INT),
-  XivelyDatastream(STREAM_CTRL_STATUS_TXT,  strlen(STREAM_CTRL_STATUS_TXT),  DATASTREAM_BUFFER, bufferValue, bufferSize),
-  XivelyDatastream(STREAM_SUCCESS,          strlen(STREAM_SUCCESS),          DATASTREAM_INT),
-  XivelyDatastream(STREAM_FAILURE,          strlen(STREAM_FAILURE),          DATASTREAM_INT),
-  XivelyDatastream(STREAM_CTRL_STATUS_CODE, strlen(STREAM_CTRL_STATUS_CODE), DATASTREAM_INT),
-  XivelyDatastream(STREAM_LEVEL_SENSOR,     strlen(STREAM_LEVEL_SENSOR),     DATASTREAM_INT),
-  XivelyDatastream(STREAM_BATTERY,          strlen(STREAM_BATTERY),          DATASTREAM_FLOAT)
+  XivelyDatastream( "0", 1, DATASTREAM_FLOAT),  // Pressure before filter
+  XivelyDatastream( "1", 1, DATASTREAM_FLOAT),  // Pressure after filter
+  XivelyDatastream( "2", 1, DATASTREAM_FLOAT),  // Water Fill Pressure
+  XivelyDatastream( "3", 1, DATASTREAM_FLOAT),  // Temp before heater
+  XivelyDatastream( "4", 1, DATASTREAM_FLOAT),  // Temp after heater
+  XivelyDatastream( "5", 1, DATASTREAM_INT),    // Heater On/Off Status
+  XivelyDatastream( "6", 1, DATASTREAM_FLOAT),  // Pump housing temperature
+  XivelyDatastream( "7", 1, DATASTREAM_FLOAT),  // Pump amps
+  XivelyDatastream( "8", 1, DATASTREAM_INT),    // Low Pressure Count
+  XivelyDatastream( "9", 1, DATASTREAM_INT),    // Minutes water fill valve was otpen today
+  XivelyDatastream("10", 2, DATASTREAM_BUFFER, bufferValue, bufferSize), // Status of controller - text
+  XivelyDatastream("11", 2, DATASTREAM_INT),    // Xively upload successes
+  XivelyDatastream("12", 2, DATASTREAM_INT),    // Xively Network Failures
+  XivelyDatastream("13", 2, DATASTREAM_INT),    // Status of controller - number
+  XivelyDatastream("14", 2, DATASTREAM_INT),    // Water level sensor
+  XivelyDatastream("15", 2, DATASTREAM_FLOAT)   // battery volts for water level sensor
 };
 
 // Wrap the datastreams into a feed
@@ -138,16 +154,11 @@ bool gotNewData;         // Flag to indicate that sketch has received new data f
 uint32_t xbeeTimeout;    // Counts time between successful Xbee data, if it goes too long, it means we've lost our connection to Xbee
 bool xBeeTimeoutFlag;    // Flag to indicate no date from Xbee, used to keep warning from going off every 5 minutes
 
+const int chipSelect = 4;  // Micro SD Card
 
 // Twitter setup
 Twitter twitter(TWITTER_TOKEN);
 
-
-// I/O Setup
-#define LED_XBEE_ERROR       6  // LED flashes when XBee error
-#define LED_XBEE_SUCCESS     7  // LED flashes when XBee success
-#define LED_XIVELY_ERROR     6  // LED flashes when Xively error
-#define LED_XIVELY_SUCCESS   5  // LED flashes when Xively success
 
 
 // Array to hold pool data received from outside controller
@@ -156,55 +167,51 @@ float PoolData[NUM_POOL_DATA_PTS];
 
 // Declare function prototypes
 void PrintPoolData();
-void flashLed(int pin, int times, int wait);
 void software_Reset();
 bool SendDataToXively();
 bool ReadXBeeData(uint16_t *Tx_Id);
+bool logDataToSdCard();
 void sendAlarmMessage();
 int SendTweet(char msgTweet[], double fpoolTime);
 int freeRam(bool PrintRam);
 void controllerStatus(char * txtStatus, int poolstatus);
 
 
-
-
-
-//=========================================================================================================
+//============================================================================
 //============================================================================
 void setup(void)
 {
   delay(1000);
-  pinMode(LED_XBEE_ERROR, OUTPUT);
-  pinMode(LED_XBEE_SUCCESS, OUTPUT);
-  pinMode(LED_XIVELY_ERROR, OUTPUT);
-  pinMode(LED_XIVELY_SUCCESS, OUTPUT);
-  
-  
-  // disable microSD card interface on Ethernet shield
-  pinMode(4, OUTPUT);
-  digitalWrite(4, HIGH);
-  
-  Serial.begin(BAUD_RATE);
+
+
+  Serial.begin(9600);
   
   #ifdef PRINT_DEBUG
     Serial.println(F("\nSetup pool controller inside"));
   #endif
   
   // Initialize XBee
-  xbee.begin(BAUD_RATE);
-  
+  xbee.begin(9600);
+
+	 
+
+  //pinMode(53, OUTPUT);
+ // digitalWrite(53, HIGH);
+
   // Initialize Ethernet
+  pinMode(4, OUTPUT);
+  digitalWrite(4, HIGH);  // disable microSD card interface while ethernet is starting
   Ethernet.begin(mac);
   delay(1000);
   
-  
-  // Setup flashes LEDs so you know Arduino is booting up
-  // parameters, Pin#, times to flash, wait time
-  flashLed(LED_XBEE_ERROR,   6, 40);
-  flashLed(LED_XBEE_SUCCESS, 6, 40);
-  flashLed(LED_XIVELY_ERROR,   6, 40);
-  flashLed(LED_XIVELY_SUCCESS, 6, 40);
-  
+  // Initialize SD Card
+  if ( SD.begin(chipSelect) )
+  { Serial.println("card initialized."); }
+  else
+  { Serial.println("Card failed, or not present"); }
+
+
+
   // Initialize global variables
   xively_uploadTimout_timer = millis() + XIVELY_UPDATE_TIMEOUT;
   xively_Upload_Timer       = millis() + XIVELY_UPDATE_INTERVAL;
@@ -214,22 +221,20 @@ void setup(void)
   xBeeTimeoutFlag   = false;
   gotNewData        = false;  // Initialize, true when new we receive new data from xbee, is reset when it uploads to Xively
   
-#ifdef PRINT_DEBUG
-  Serial.println(F("End setup"));
-  freeRam(true);
-#endif
-}  //setup()
+  #ifdef PRINT_DEBUG
+    Serial.println(F("End setup"));
+    freeRam(true);
+  #endif
+  
+} // setup()
 
 
 //=========================================================================================================
 //============================================================================
 void loop(void)
 {
-  
-  
   uint16_t xbeeID;                // ID of transimitting xbee
   char msgTweet[TWEETMAXSIZE];    // Holds text for twitter message.  Should be big enough for message and timestamp
-  
   
   // Read XBee data
   // Keep tying to read data until successful.  After 30 tries, give up and move on
@@ -244,7 +249,7 @@ void loop(void)
   
   // Send a Tweet for startup, do this after you read xbee data so you can append pooltime which avoids duplicate tweets
   static bool tweetstartup;
-  if (tweetstartup == false && millis() > 20000)
+  if (tweetstartup == false && millis() > 20000UL)
   {
     strcpy(msgTweet, "Inside pool monitor has restarted.");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
@@ -268,6 +273,10 @@ void loop(void)
   {
     xively_Upload_Timer = millis() + XIVELY_UPDATE_INTERVAL;  // Reset timer
     SendDataToXively(); // Send Data to Xively
+    
+    // Log data to SD Card, if we are receiving data from outside controller
+    if ( xBeeTimeoutFlag == false)
+    { logDataToSdCard(); }
   }
   
   // Check inputs and send message (Tweet) if anything is wrong
@@ -306,6 +315,7 @@ void sendAlarmMessage()
   static bool tf_pumpOnAtNight;      // Pump on at night
   static bool tf_waterFillOn;        // Water fill valve is on
   static bool tf_heaterIsOn;         // Heater is on
+  static bool tf_Xbee_Comm;          // Xbee communication, send alert if no comm
   // flags for sensor status.
   static bool tf_preHeatTemperatureSensor;
   static bool tf_postHeatTemperatureSensor;
@@ -316,14 +326,11 @@ void sendAlarmMessage()
   static bool tf_pumpAmpsSensor;
   static bool tf_waterLevelSensor;
   
-
-  
-  
   char msgTweet[TWEETMAXSIZE];    // Holds text for twitter message.  Should be big enough for message and timestamp
 
   // If Arduino recently restarted (last 10 seconds), set waterFillCntDnFlag to true so it
   // doesn't send a tweet if the water fill is on
-  if(millis() < 10000)
+  if(millis() < 10000UL)
   { tf_waterFillOn = true; }
   
   
@@ -409,7 +416,16 @@ void sendAlarmMessage()
     strcpy(msgTweet, "Pool heater is on");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
-  
+
+  // Send alert if xbee communication is lost
+  if(xBeeTimeoutFlag && tf_Xbee_Comm == false)
+  {
+    tf_Xbee_Comm = true;
+    strcpy(msgTweet, "Lost xBee communication");
+    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+  }
+
+
   // Send tweet if any sensors are having trouble
   if ((sensorStatusbyte >> 0) & 1 == 0 && tf_preHeatTemperatureSensor == false )
   {
@@ -645,13 +661,11 @@ bool SendDataToXively()
         Serial.println(F("Successful Xively upload"));
       #endif
       // Flash twice when we send data to Xively successfully
-      flashLed(LED_XIVELY_SUCCESS, 1, 150);
 
       return true;
       break;
     case HTTP_ERROR_CONNECTION_FAILED:
       failures++;
-      flashLed(LED_XIVELY_ERROR, 1, 150);
       #ifdef PRINT_DEBUG
         Serial.println(F("\nconnection to api.xively.com has failed. Failures = "));
         Serial.println(failures);
@@ -660,7 +674,6 @@ bool SendDataToXively()
       break;
     case HTTP_ERROR_API:
       failures++;
-      flashLed(LED_XIVELY_ERROR, 1, 150);
       #ifdef PRINT_DEBUG
         Serial.println(F("\nA method of HttpClient class was called incorrectly. Failures = "));
         Serial.println(failures);
@@ -669,7 +682,6 @@ bool SendDataToXively()
       break;
     case HTTP_ERROR_TIMED_OUT:
       failures++;
-      flashLed(LED_XIVELY_ERROR, 1, 150);
       #ifdef PRINT_DEBUG
         Serial.println(F("\nConnection with api.xively.com has timed-out. Failures = "));
         Serial.println(failures);
@@ -678,7 +690,6 @@ bool SendDataToXively()
       break;
     case HTTP_ERROR_INVALID_RESPONSE:
       failures++;
-      flashLed(LED_XIVELY_ERROR, 1, 150);
       #ifdef PRINT_DEBUG
         Serial.println(F("\nInvalid or unexpected response from the server. Failures = "));
         Serial.println(failures);
@@ -687,7 +698,6 @@ bool SendDataToXively()
       break;
     default:
       failures++;
-      flashLed(LED_XIVELY_ERROR, 1, 150);
       #ifdef PRINT_DEBUG
         Serial.print(F("\nXively Unknown status: "));
         Serial.print(ret);
@@ -746,7 +756,6 @@ bool ReadXBeeData(uint16_t *Tx_Id)
       #ifdef PRINT_DEBUG
         Serial.println(F("Got XBee Response, but not RX_16_RESPONSE"));
       #endif
-      flashLed(LED_XBEE_ERROR, 1, 150);
       xbeeErrors++;
       return false;
     }
@@ -760,7 +769,6 @@ bool ReadXBeeData(uint16_t *Tx_Id)
       //srg      Serial.print(F("XBee error reading packet. Err code: "));
       //      Serial.println(xbee.getResponse().getErrorCode());
     #endif
-    flashLed(LED_XBEE_ERROR, 1, 150);
     return false;
   } // End Got Something
   else
@@ -770,12 +778,68 @@ bool ReadXBeeData(uint16_t *Tx_Id)
       //srg      Serial.print(F("XBee not avail, Err code: "));
       //      Serial.println(xbee.getResponse().getErrorCode());
     #endif
-    flashLed(LED_XBEE_ERROR, 1, 150);
     return false;
   }
   
 } // ReadXbeeData()
 
+
+
+//=========================================================================================================
+//=========================================================================================================
+bool logDataToSdCard()
+{
+
+  // open the file. note that only one file can be open at a time,
+  // so you have to close this one before opening another.
+  File dataFile = SD.open("datalog.txt", FILE_WRITE);
+
+  // if the file is available, write to it:
+  if (dataFile)
+  {
+    dataFile.print(PoolData[P_POOL_TIME],2);
+    dataFile.print(F("\t"));
+    dataFile.print(PoolData[P_TEMP1],1);
+    dataFile.print(F("\t"));
+    dataFile.print(PoolData[P_TEMP2],1);
+    dataFile.print(F("\t"));
+    dataFile.print(PoolData[P_TEMP_PUMP],1);
+    dataFile.print(F("\t"));
+    dataFile.print(PoolData[P_PUMP_AMPS],1);
+    dataFile.print(F("\t"));
+    dataFile.print(PoolData[P_PRESSURE1],1);
+    dataFile.print(F("\t"));
+    dataFile.print(PoolData[P_PRESSURE2],1);
+    dataFile.print(F("\t"));
+    dataFile.print(PoolData[P_PRESSURE3],1);
+    dataFile.print(F("\t"));
+    dataFile.print(PoolData[P_LOW_PRES_CNT],0);
+    dataFile.print(F("\t"));
+    dataFile.print(PoolData[P_WATER_FILL_MINUTES],0);
+    dataFile.print(F("\t"));
+    dataFile.print(PoolData[P_WATER_LVL_BATT]/1000.0,2);  // battery volts
+    dataFile.print(F("\t"));
+    dataFile.print(PoolData[P_CONTROLLER_STATUS],0);
+    dataFile.print(F("\t"));
+    dataFile.print(sensorStatusbyte, BIN);
+    dataFile.print(F("\t"));
+    dataFile.print(ioStatusbyte, BIN);
+    dataFile.println();
+
+    dataFile.close();
+
+    // print to the serial port too:
+    Serial.println(F("Saved data to SD Card"));
+    return true;
+  }
+  // if the file isn't open, pop up an error:
+  else
+  {
+    Serial.println("error opening datalog.txt");
+    return false;
+  } 
+  
+}  // logDataToSdCard
 
 //=========================================================================================================
 // Print data sent from Pool Xbee
@@ -865,23 +929,6 @@ void controllerStatus(char * txtStatus, int poolstatus)
       break;
   }
 }  //controllerStatus()
-
-
-//=========================================================================================================
-//  Flash LEDs to indicate if status of program
-//=========================================================================================================
-void flashLed(int pin, int times, int wait)
-{
-  for (int i = 0; i < times; i++)
-  {
-    digitalWrite(pin, HIGH);
-    delay(wait);
-    digitalWrite(pin, LOW);
-    
-    if (i + 1 < times)
-    { delay(50); }
-  }
-} // flashLed()
 
 
 
