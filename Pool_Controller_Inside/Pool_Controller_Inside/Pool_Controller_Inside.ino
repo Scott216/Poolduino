@@ -39,7 +39,9 @@ SCK   13   52
 
 #include <SPI.h>             // Communicate with SPI devices http://arduino.cc/en/Reference/SPI
 #include <Ethernet.h>        // LIbrary for Arduino ethernet shield http://arduino.cc/en/Reference/Ethernet
-#include <HttpClient.h>      // https://github.com/amcewen/HttpClient/blob/master/HttpClient.h
+#include <HttpClient.h>      // http://github.com/amcewen/HttpClient/blob/master/HttpClient.h
+#include <Time.h>            // http://playground.arduino.cc/Code/time
+#include <SPI.h>             // http://arduino.cc/en/Reference/SPI
 #include <SD.h>              // Micro SD Card. http://arduino.cc/en/Reference/SD
 #include <Xively.h>          // http://github.com/xively/xively_arduino
 #include <Twitter.h>         // http://arduino.cc/playground/Code/TwitterLibrary, get token from token at http://arduino-tweet.appspot.com/
@@ -144,6 +146,14 @@ uint8_t successes = 0;    // Xively upload success, will rollover at 255, but th
 uint8_t failures =  0;    // Xively upload failures
 
 
+// NPT Time setup
+IPAddress timeServer(132, 163, 4, 101); // time-a.timefreq.bldrdoc.gov
+const int timeZone = -4;  // Eastern Standard Time (USA)
+EthernetUDP Udp;
+const int NTP_PACKET_SIZE = 48;     // NTP time is in the first 48 bytes of message
+byte packetBuffer[NTP_PACKET_SIZE]; // buffer to hold incoming & outgoing packets
+
+
 // Xbee Setup stuff
 XBee xbee = XBee();
 XBeeResponse response = XBeeResponse();
@@ -175,6 +185,9 @@ void sendAlarmMessage();
 int SendTweet(char msgTweet[], double fpoolTime);
 int freeRam(bool PrintRam);
 void controllerStatus(char * txtStatus, int poolstatus);
+void sendNTPpacket(IPAddress &address);
+time_t getNtpTime();
+
 
 
 //============================================================================
@@ -193,7 +206,6 @@ void setup(void)
   // Initialize XBee
   xbee.begin(9600);
 
-	 
 
   //pinMode(53, OUTPUT);
  // digitalWrite(53, HIGH);
@@ -203,7 +215,27 @@ void setup(void)
   digitalWrite(4, HIGH);  // disable microSD card interface while ethernet is starting
   Ethernet.begin(mac);
   delay(1000);
-  
+
+
+  unsigned int localPort = 8888;    // local port to listen for UDP packets
+  Serial.println(Ethernet.localIP());
+  Udp.begin(localPort);
+
+  // Setup NTP time
+  setSyncProvider(getNtpTime);  // tells time library to call getNtpTime() when it wants to sync arduino with NTP time
+  // Get time from UDP server
+  if ( getNtpTime() == 0 )
+  {
+    // Couldn't get time from UDP Server, try one more tiem
+    delay(500);
+    getNtpTime();
+  }
+  //  setTime(hour(t),minute(t),second(t),month(t),day(t),year(t));
+  char timebuf[16];
+  sprintf(timebuf, "Time: %02d:%02d:%02d", hour(),minute(),second());
+  Serial.println(timebuf);
+
+  	
   // Initialize SD Card
   if ( SD.begin(chipSelect) )
   { Serial.println("card initialized."); }
@@ -789,14 +821,32 @@ bool ReadXBeeData(uint16_t *Tx_Id)
 //=========================================================================================================
 bool logDataToSdCard()
 {
+  File myFile;
+
+  // Build log file name: YYYYMMDD.log
+  char logfile[13];
+  sprintf(logfile, "%d%02d%02d.log", year(), month(), day());
+
+  // Check to see if the file exists:
+  if (!SD.exists(logfile))
+  {
+    // log file doesn't exist, create it
+    myFile = SD.open(logfile, FILE_WRITE);
+    myFile.close();
+  }
+
 
   // open the file. note that only one file can be open at a time,
   // so you have to close this one before opening another.
-  File dataFile = SD.open("datalog.txt", FILE_WRITE);
+  File dataFile = SD.open(logfile, FILE_WRITE);
 
   // if the file is available, write to it:
   if (dataFile)
   {
+    char timebuf[24];
+    sprintf(timebuf, " %02d/%02d/%d %02d:%02d:%02d", month(),day(),year(),hour(),minute(),second());
+    dataFile.println(timebuf);
+    dataFile.print(F("\t"));
     dataFile.print(PoolData[P_POOL_TIME],2);
     dataFile.print(F("\t"));
     dataFile.print(PoolData[P_TEMP1],1);
@@ -829,13 +879,15 @@ bool logDataToSdCard()
     dataFile.close();
 
     // print to the serial port too:
-    Serial.println(F("Saved data to SD Card"));
+    Serial.print(F("Saved data to SD Card - "));
+    Serial.println(logfile);
     return true;
   }
   // if the file isn't open, pop up an error:
   else
   {
-    Serial.println("error opening datalog.txt");
+    Serial.print("error opening ");
+    Serial.println(logfile);
     return false;
   } 
   
@@ -961,7 +1013,56 @@ int freeRam(bool PrintRam)
     Serial.println(freeSRAM);
   }
   return freeSRAM;
-  
+
 } // freeRam()
+
+
+// -------- NTP code ----------
+time_t getNtpTime()
+{
+  while (Udp.parsePacket() > 0) ; // discard any previously received packets
+  Serial.println(F("Transmit NTP Request"));
+  sendNTPpacket(timeServer);
+  uint32_t beginWait = millis();
+  while (millis() - beginWait < 1500) {
+    int size = Udp.parsePacket();
+    if (size >= NTP_PACKET_SIZE) {
+      Serial.println(F("Receive NTP Response"));
+      Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
+      unsigned long secsSince1900;
+      // convert four bytes starting at location 40 to a long integer
+      secsSince1900 =  (unsigned long)packetBuffer[40] << 24;
+      secsSince1900 |= (unsigned long)packetBuffer[41] << 16;
+      secsSince1900 |= (unsigned long)packetBuffer[42] << 8;
+      secsSince1900 |= (unsigned long)packetBuffer[43];
+      return secsSince1900 - 2208988800UL + timeZone * SECS_PER_HOUR;
+    }
+  }
+  Serial.println("No NTP Response :-(");
+  return 0; // return 0 if unable to get the time
+}  // getNtpTime()
+
+// send an NTP request to the time server at the given address
+void sendNTPpacket(IPAddress &address)
+{
+  // set all bytes in the buffer to 0
+  memset(packetBuffer, 0, NTP_PACKET_SIZE);
+  // Initialize values needed to form NTP request
+  // (see URL above for details on the packets)
+  packetBuffer[0] = 0b11100011;   // LI, Version, Mode
+  packetBuffer[1] = 0;     // Stratum, or type of clock
+  packetBuffer[2] = 6;     // Polling Interval
+  packetBuffer[3] = 0xEC;  // Peer Clock Precision
+  // 8 bytes of zero for Root Delay & Root Dispersion
+  packetBuffer[12]  = 49;
+  packetBuffer[13]  = 0x4E;
+  packetBuffer[14]  = 49;
+  packetBuffer[15]  = 52;
+  // all NTP fields have been given values, now
+  // you can send a packet requesting a timestamp:
+  Udp.beginPacket(address, 123); //NTP requests are to port 123
+  Udp.write(packetBuffer, NTP_PACKET_SIZE);
+  Udp.endPacket();
+}  // sendNTPpacket()
 
 

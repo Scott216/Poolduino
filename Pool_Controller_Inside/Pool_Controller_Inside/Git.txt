@@ -1,5 +1,5 @@
 
-https://github.com/Scott216/Poolduino
+http://github.com/Scott216/Poolduino
 
 Git directory:
 cd Dropbox/Arduino/Pool_Controller/

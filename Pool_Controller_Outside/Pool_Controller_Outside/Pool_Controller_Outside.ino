@@ -372,9 +372,10 @@ void loop ()
   }
   
   // Check for constant low pressure, not pressure fluctuations
-  // If pressure is low and low pressure timer has not started yet
+  // If pressure is low and low pressure timer has not started yet and controller is in auto mode.
   if( pressure[PRE_FILTER_PRESSURE] < 11 &&
      digitalRead(PUMP_OUTPUT) == HIGH &&
+     digitalRead(PUMP_INPUT_AUTO) == PUMP_SWITCH_ON &&
      isLowPressTimerRunning == false ) // && startupLowPressFlag == false )
   {
     lowPressTimer = millis() +  300000UL;  // start low pressure timer for 5 minutes (300k mS)
