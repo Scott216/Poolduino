@@ -8,11 +8,10 @@ It uses an XBee series 1
 To do:
 See if you can update water added today every minute, not just when it's complete it's cycle
 Don't seem to need xbeeID Tx_Id parameter in xbee function
-Use time library so arduino knows what time it is - because I want this in the log file
 Create new Xively feed, re-order streams and give them names instead of numbered IDs
 - will need to update alert services
 
-Figure out how to send commands to outside xbee from inside xbee, then see if you can shut pump off from iphone.
+Figure out how to send commands to outside xbee from inside xbee, then see if you can shut pump off from iphone.  Make sure there is confirmation between xbees.
 Turn pump off from iphone/website http://www.yaler.org/
 Instructables for Yaler and Arduino http://www.instructables.com/id/Arduino-Web-LED/step5/Accessing-and-controlling-the-Arduino-from-the-Web/
 
@@ -72,7 +71,7 @@ Status code numbers from outside controller
 To send data to this particular xbee, the transmitter uses the Receiver's MY address, not the DL address
 See http://www.digi.com/support/kbase/kbaseresultdetl?id=2187
 
-/* XBee packet structure
+XBee packet structure
 0 Temp Pre Heater
 1 Temp Post Heater
 2 Temp Pump houseing
@@ -89,3 +88,27 @@ See http://www.digi.com/support/kbase/kbaseresultdetl?id=2187
 13 Low Water Level - calculated
 14 Sensor Input Status Byte
 15 Dicrete I/O status byte
+
+
+Sensors working ok Status Byte: 1 if sensor is working properly, 0 of not
+sensorStatusbyte
+0 Pre-heat temperature
+1 Post-heat temperature
+2 Pump temperature
+3 Pre-filter pressure
+4 Post-filter pressure
+5 Water fill pressure
+6 pump amps
+7 Water level sensor
+
+Discrete I/O status byte: shows on/off state if I/O
+ioStatusbyte
+0 Pump on/off relay
+1 Auto-Off-On switch is in Auto Position
+2 Auto-Off-On switch is in On Position
+3 Water fill LED
+4 Water fill pushbutton input
+5 Water fill valve relay
+6 Heater on/off relay output
+7 Water Level Sensor (real time)
+

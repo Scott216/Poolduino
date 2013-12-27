@@ -72,29 +72,6 @@ SCK   13   52
 byte sensorStatusbyte;          // Each bit determines if sensor is operating properly
 byte ioStatusbyte;              // Each bit shows input value of digital I/O
 
-/*
- Sensors working ok Status Byte: 1 if sensor is working properly, 0 of not
- sensorStatusbyte
- 0 Pre-heat temperature
- 1 Post-heat temperature
- 2 Pump temperature
- 3 Pre-filter pressure
- 4 Post-filter pressure
- 5 Water fill pressure
- 6 pump amps
- 7 Water level sensor
- 
- Discrete I/O status byte: shows on/off state if I/O
- ioStatusbyte
- 0 Pump on/off relay
- 1 Auto-Off-On switch is in Auto Position
- 2 Auto-Off-On switch is in On Position
- 3 Water fill LED
- 4 Water fill pushbutton input
- 5 Water fill valve relay
- 6 Heater on/off relay output
- 7 Water Level Sensor (real time)
- */
 
 // Xively Stream IDs
 #define NUM_XIVELY_STREAMS  16
@@ -170,7 +147,6 @@ const int chipSelect = 4;  // Micro SD Card
 Twitter twitter(TWITTER_TOKEN);
 
 
-
 // Array to hold pool data received from outside controller
 float PoolData[NUM_POOL_DATA_PTS];  
 
@@ -180,7 +156,7 @@ void PrintPoolData();
 void software_Reset();
 bool SendDataToXively();
 bool ReadXBeeData(uint16_t *Tx_Id);
-bool logDataToSdCard();
+bool logDataToSdCard(char msgComment[]);
 void sendAlarmMessage();
 int SendTweet(char msgTweet[], double fpoolTime);
 int freeRam(bool PrintRam);
@@ -308,7 +284,7 @@ void loop(void)
     
     // Log data to SD Card, if we are receiving data from outside controller
     if ( xBeeTimeoutFlag == false)
-    { logDataToSdCard(); }
+    { logDataToSdCard(""); }
   }
   
   // Check inputs and send message (Tweet) if anything is wrong
@@ -553,13 +529,16 @@ void sendAlarmMessage()
 //=========================================================================================================
 int SendTweet(char * txtTweet, double fpoolTime)
 {
-  
+
+  logDataToSdCard(txtTweet); // update log file
+
   char cpoolTime[19];   // char arry to hold pool time
   
   if(strlen(txtTweet) <= TWEETMAXSIZE - 20) // Make sure message there is room in character array for the timestamp
   {
-    sprintf(cpoolTime, " Pool Time: %01d:%02d", int(floor(fpoolTime)), (int)((fpoolTime - floor(fpoolTime)) * 60));
-    strcat(txtTweet, cpoolTime);          // Append pool time decimal format to the message
+//    sprintf(cpoolTime, " Pool Time: %01d:%02d", int(floor(fpoolTime)), (int)((fpoolTime - floor(fpoolTime)) * 60));
+    sprintf(cpoolTime, " Time: %d:%02d", hour(), minute());
+    strcat(txtTweet, cpoolTime);          // Append pool to the message
   }
   
   if (twitter.post(txtTweet))
@@ -819,20 +798,28 @@ bool ReadXBeeData(uint16_t *Tx_Id)
 
 //=========================================================================================================
 //=========================================================================================================
-bool logDataToSdCard()
+bool logDataToSdCard(char * txtComment)
 {
-  File myFile;
 
   // Build log file name: YYYYMMDD.log
   char logfile[13];
-  sprintf(logfile, "%d%02d%02d.log", year(), month(), day());
+  sprintf(logfile, "%02d%02d%02d.log", year()-2000, month(), day());
 
   // Check to see if the file exists:
   if (!SD.exists(logfile))
   {
     // log file doesn't exist, create it
-    myFile = SD.open(logfile, FILE_WRITE);
-    myFile.close();
+    File newFile = SD.open(logfile, FILE_WRITE);
+    // Create header row
+    newFile.print(F("Timestamp\tPool Time\tpre heat Temp\tpost heat temp\tpump temp\tamps\tpre fltr pressure\tpost fltr pressure\twtr fill pressure"));
+    newFile.print(F("\tlow pressure cnt\twater fill min\tbattery\tstatus ID\tstatus txt"));
+     // sensorStatusbyte
+    newFile.print(F("\tPre-heat sensor\tpost-heat sensor\tpump temp sensor\tpre-filter sensor\tpost-filter sensor\tWater fill sensor\tamps sensor\tlevel sensor"));
+    //  ioStatusbyte
+    newFile.print(F("\tpump on/off relay\tauto switch\ton switch\tWater fill LED\tWater fill pb\tWater fill output\tHeater output\tLevel Sensor"));
+    newFile.print(F("\tUpload Success\tfailures\txbee timeout\tcomment"));
+    newFile.println();
+    newFile.close();
   }
 
 
@@ -845,7 +832,7 @@ bool logDataToSdCard()
   {
     char timebuf[24];
     sprintf(timebuf, " %02d/%02d/%d %02d:%02d:%02d", month(),day(),year(),hour(),minute(),second());
-    dataFile.println(timebuf);
+    dataFile.print(timebuf);
     dataFile.print(F("\t"));
     dataFile.print(PoolData[P_POOL_TIME],2);
     dataFile.print(F("\t"));
@@ -869,16 +856,34 @@ bool logDataToSdCard()
     dataFile.print(F("\t"));
     dataFile.print(PoolData[P_WATER_LVL_BATT]/1000.0,2);  // battery volts
     dataFile.print(F("\t"));
-    dataFile.print(PoolData[P_CONTROLLER_STATUS],0);
+    dataFile.print(PoolData[P_CONTROLLER_STATUS],0);    // controller status ID
+    char txtStatus[statusBufLen];
+    controllerStatus(txtStatus,  PoolData[P_CONTROLLER_STATUS]);  // controller status text
     dataFile.print(F("\t"));
-    dataFile.print(sensorStatusbyte, BIN);
+    dataFile.print(txtStatus);
+    // export each bit in sensorStatusbyte
+    for (byte i = 0; i < 8; i++)
+    {
+      dataFile.print(F("\t"));
+      dataFile.print((sensorStatusbyte >> i) & 1);
+    }
+    // export each bit in the ioStatusbyte
+    for (byte i = 0; i < 8; i++)
+    {
+      dataFile.print(F("\t"));
+      dataFile.print((ioStatusbyte >> i) & 1);
+    }
     dataFile.print(F("\t"));
-    dataFile.print(ioStatusbyte, BIN);
+    dataFile.print(successes);
+    dataFile.print(F("\t"));
+    dataFile.print(failures);
+    dataFile.print(F("\t"));
+    dataFile.print(xBeeTimeoutFlag);
+    dataFile.print(F("\t"));
+    dataFile.print(txtComment);
     dataFile.println();
-
     dataFile.close();
 
-    // print to the serial port too:
     Serial.print(F("Saved data to SD Card - "));
     Serial.println(logfile);
     return true;
@@ -886,7 +891,7 @@ bool logDataToSdCard()
   // if the file isn't open, pop up an error:
   else
   {
-    Serial.print("error opening ");
+    Serial.print(F("error opening "));
     Serial.println(logfile);
     return false;
   } 

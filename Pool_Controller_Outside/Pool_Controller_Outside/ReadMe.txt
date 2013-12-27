@@ -21,6 +21,7 @@ Build RTC on PCB, digikey DS1307+-ND, Crystal digikey X1124-ND
 If you do your own RTC refer see pg 6 of this doc: http://www.emesystems.com/pdfs/parts/DS1307_xtal.pdf it explains PCB requirements for the crystal
 Small LCD to display status
 1-5 volt pressure transducers should have a 25k pull-down resistor so you know when if cable has a problem
+protect arduino against short circuits of sensor wire
 
 
 Bugs:
