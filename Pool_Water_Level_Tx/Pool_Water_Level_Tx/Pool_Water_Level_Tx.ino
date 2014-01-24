@@ -1,3 +1,24 @@
+///
+/// @file		Pool_Water_Level_Tx.ino
+/// @brief		Main sketch
+/// Project 	Pool_Water_Level_Tx Library
+///
+/// @details	<#details#>
+/// @n @a		Developed with [embedXcode+](http://embedXcode.weebly.com)
+/// 
+/// @author		Scott Goldthwaite
+/// @author		Scott Goldthwaite
+///
+/// @date		1/24/14 3:23 PM
+/// @version	<#version#>
+/// 
+/// @copyright	(c) Scott Goldthwaite, 2014
+/// @copyright	GNU General Public License
+///
+/// @see		ReadMe.txt for references
+/// @n
+///
+
 /*
 To Do
 Add reset button
@@ -345,3 +366,4 @@ void writeRegister(byte addressToWrite, byte dataToWrite)
   Wire.write(dataToWrite);
   Wire.endTransmission(); //Stop transmitting
 }  // writeRegister()
+

@@ -47,7 +47,7 @@ SCK   13   52
 #include <Twitter.h>         // http://arduino.cc/playground/Code/TwitterLibrary, get token from token at http://arduino-tweet.appspot.com/
 #include <XBee.h>            // http://code.google.com/p/xbee-arduino/     Modified per http://arduino.cc/forum/index.php/topic,111354.0.html
 #include <Tokens.h>          // Tokens for Xively and twitter
-#include "LocalLibrary.h"    // Include application, user and local libraries
+#include "Pool_Controller_Inside_Library.h"    // Include application, user and local libraries
 
 
 // Array positions for pool data array PoolData[]

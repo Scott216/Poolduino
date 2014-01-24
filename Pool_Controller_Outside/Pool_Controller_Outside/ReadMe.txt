@@ -1,6 +1,3 @@
-/*
-
-
 Features to add:
 - web enabled remote shutdown
 - web enabled remote water fill

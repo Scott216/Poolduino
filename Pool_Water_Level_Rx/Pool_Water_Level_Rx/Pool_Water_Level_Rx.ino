@@ -1,3 +1,23 @@
+///
+/// @file		Pool_Water_Level_Rx.ino
+/// @brief		Main sketch
+/// Project 	Pool_Water_Level_Rx Library
+///
+/// @details	<#details#>
+/// @n @a		Developed with [embedXcode+](http://embedXcode.weebly.com)
+/// 
+/// @author		Scott Goldthwaite
+/// @author		Scott Goldthwaite
+///
+/// @date		1/24/14 3:17 PM
+/// @version	<#version#>
+/// 
+/// @copyright	(c) Scott Goldthwaite, 2014
+/// @copyright	GNU General Public License
+///
+/// @see		ReadMe.txt for references
+/// @n
+///
 
 
 /* 
