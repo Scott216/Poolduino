@@ -8,10 +8,10 @@ You can do all all this on A4, which is where water fill input goes now. If you 
 to light up,  use pins D12 & D13, they are the current inputs to on-off-auto.  Make provision for heater on and pool light on pushbuttons.
 - Turn heater on/off with arduino
 - turn pool light on/off with arduino
+- Bluefruit for programming wirelessly
 
 
 PCB Ideas
-Leonardo plug into PCB
 Build CT circuit onto PCB
 Terminal strips for all sensor connections
 Build RTC on PCB, digikey DS1307+-ND, Crystal digikey X1124-ND
@@ -19,6 +19,34 @@ If you do your own RTC refer see pg 6 of this doc: http://www.emesystems.com/pdf
 Small LCD to display status
 1-5 volt pressure transducers should have a 25k pull-down resistor so you know when if cable has a problem
 protect arduino against short circuits of sensor wire
+Level shifter for I2C for panStamp
+
+Hardware:
+Leonardo
+Xbee
+panStamp
+RTC  http://www.adafruit.com/products/264
+t/c amp  http://bit.ly/1iXdMhm
+CT circuit: LM324, 2x 1n4148, 10uF cap, 220Ω, 62k, 1.5k
+LCD - future
+relay for water fill valve (draws 1/4 amp) Use reed relay 9007-05-00
+relay for heter (draws 1/3 amp) use reed relay 9007-05-00
+
+
+Terminal Blocks / JST plugs
+Power 2-pin
+One wire temp: 3-pin
+Pres 1: 2-pin
+Pres 2: 2-pin
+Pres 3: 2-pin
+Motor Amps: 2-pin
+Water fill pushbutton: 2-pin
+Water fill LED output: 2-pin
+Water fill output: 2-pin
+On-Off-Auto switch: 3-pin
+Pump on output: 2-pin
+Heater On output: 2-pin (future use)
+
 
 
 Bugs:
@@ -81,6 +109,7 @@ Terminal blocks, DIN rail
 Thermocouple Amplifier - www.adafruit.com MAX6675 breakout boards (discontinued May 2012)
 For Pressure gauge (not pressure transducer)
 1 243 Ω resistors
+
 For Pump Amps from CT
 1 MAX1044 voltage converter, Digikey MAX1044CPA+-ND
 3 10uF electrolytic capacitors, Digikey P975-ND
@@ -109,6 +138,12 @@ Adafruit MAX6675 breakout board pinout
 --DO
 --CS       Yellow(+) --
 --CLK (SCK)
+
+OneWire
+-- GND
+-- Data
+-- +5V
+4.7k resistor between data and 5v
 
 
 Pre-Filter Pressure

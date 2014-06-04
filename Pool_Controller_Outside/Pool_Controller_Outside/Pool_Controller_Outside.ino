@@ -7,7 +7,7 @@
 
 #include <Wire.h>       // http://www.arduino.cc/en/Reference/Wire
 #include <RTClib.h>     // http://github.com/adafruit/RTClib
-#include <XBee.h>       //http://code.google.com/p/xbee-arduino/     Modified per http://arduino.cc/forum/index.php/topic,111354.0.html
+#include <XBee.h>       // http://code.google.com/p/xbee-arduino/     Modified per http://arduino.cc/forum/index.php/topic,111354.0.html
 #include <Button.h>     // For pushbutton http://github.com/carlynorama/Arduino-Library-Button
 #include <OneWire.h>    // http://www.pjrc.com/teensy/td_libs_OneWire.html  http://playground.arduino.cc/Learning/OneWire
 #include <DallasTemperature.h> // http://milesburton.com/index.php?title=Dallas_Temperature_Control_Library
@@ -16,19 +16,21 @@
 
 
 // === Analog I/O Pins ===
-#define PRESSURE1_PIN        0       // Pressure before filter
-#define PRESSURE2_PIN        1       // Pressure after filter
+#define PRESSURE1_PIN            0   // Pressure before filter
+#define PRESSURE2_PIN            1   // Pressure after filter
+#define PUMP_AMPS_PIN            3   // Pump amps input 20 Amp CT
+#define WATER_FILL_PB           A4   // Push-button for water fill, use as digital input - fills water 15 minutes each time it's pressed
 #define WATER_FILL_PRESSURE_PIN  5   // Pressure at water fill line.  Transducer can be 0-30 or 0-100 PSI transducer
-#define PUMP_AMPS_PIN        3       // Pump amps input 20 Amp CT
-#define WATER_FILL_PB       A4       // Push-button for water fill, use as digital input - fills water 15 minutes each time it's pressed
-// A5 not used
+// A2 Unused
 
 // === Digital I/0 Pins ===
 // Pins 0 & 1 are used to communicate with xBee
 // Pins 2 and 3 are used by Lonardo for I2C communication
 // D4 unused
 #define ONE_WIRE_BUS         5   // OneWire temperture sensor bus
-// D6,D7,D8 unused
+#define OLED_RST             6   // OLED display reset
+#define HEAT_OUTPUT          7   // Turn on heater
+// D8 unused
 #define PUMP_OUTPUT          9   // Turns pump on/off
 #define WATER_FILL_PB_LED   10   // LED on Water Fill Pushbutton
 #define WATER_OUTPUT        11   // Controls water fill solenoid valve
@@ -189,6 +191,7 @@ void setup ()
 #ifdef PRINT_DEBUG
   Serial.begin(9600);
 #endif
+  xbee.begin(Serial);
   
   pinMode(PUMP_OUTPUT,       OUTPUT);
   pinMode(WATER_FILL_PB_LED, OUTPUT);
@@ -202,8 +205,6 @@ void setup ()
   digitalWrite(WATER_FILL_PB_LED, LOW);
   digitalWrite(WATER_OUTPUT,      LOW);
   
-  // start serial
-  xbee.begin(9600);
   
   // Initialize I2C library - for panStamp communication and RTC
   Wire.begin();
