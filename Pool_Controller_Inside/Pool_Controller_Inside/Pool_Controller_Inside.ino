@@ -3,7 +3,7 @@
  
  Xbee Shield switch: to upload sketch, slide switch away from edge
 
-SD Card: 
+SD Card links: 
 http://arduino.cc/en/Reference/SD
 http://arduino.cc/en/Reference/SDCardNotes
 http://arduino.cc/en/Tutorial/Datalogger - log data to file
@@ -12,7 +12,6 @@ http://code.google.com/p/sdfatlib/
 http://code.google.com/p/fat16lib/ - minimal implementation of the FAT16 file
 http://www.ladyada.net/learn/arduino/ethfiles.html - tutorial using ethernet and SD Card together, doesn't seem applicable to me
 http://learn.adafruit.com/adafruit-data-logger-shield/for-the-mega-and-leonardo
-
 
 
 Format FAT 16
@@ -45,11 +44,11 @@ SCK   13   52
 #include <SD.h>              // Micro SD Card. http://arduino.cc/en/Reference/SD
 #include <Xively.h>          // http://github.com/xively/xively_arduino
 #include <Twitter.h>         // http://arduino.cc/playground/Code/TwitterLibrary, get token from token at http://arduino-tweet.appspot.com/
-#include <XBee.h>            // http://code.google.com/p/xbee-arduino/     Modified per http://arduino.cc/forum/index.php/topic,111354.0.html
+#include <XBee.h>            // http://code.google.com/p/xbee-arduino/
 #include <Tokens.h>          // Tokens for Xively and twitter
 #include "Pool_Controller_Inside_Library.h"    // Include application, user and local libraries
 
-
+/*
 // Array positions for pool data array PoolData[]
 #define P_TEMP1               0   // Temperature before heater
 #define P_TEMP2               1   // Temperature after
@@ -68,6 +67,28 @@ SCK   13   52
 #define P_SENSORSTATUSBYTE   14   // Sensor Inputs Status Byte: 1 if sensor is working properly, 0 of not
 #define P_IOSTATUSBYTE       15   // Discrete I/O status byte: shows on/off state if I/O
 #define NUM_POOL_DATA_PTS    16   // Number of data points in pool array xbee packet
+*/
+
+// Index positions for PoolData[] array
+enum PoolDataIndex {
+ P_TEMP1 = 0,           // Temperature before heater
+ P_TEMP2,               // Temperature after
+ P_TEMP_PUMP,           // Pump housing temperature
+ P_PUMP_AMPS,           // Amps pump is using
+ P_PRESSURE1,           // Pressure before filter
+ P_PRESSURE2,           // Pressure after filter
+ P_PRESSURE3,           // Pressure of water fill line
+ P_LOW_PRES_CNT,        // Counts times pressure was low
+ P_CONTROLLER_STATUS,   // Controller status 0-8
+ P_WATER_FILL_MINUTES,  // Minutes water fill valve was open today
+ P_WATER_FILL_COUNTDN,  // Countdown timer for water fill valve
+ P_POOL_TIME,           // Pool time from RTC, 2:45 PM = 14.75
+ P_WATER_LVL_BATT,      // Water level battery voltage
+ P_LOW_WATER,           // Low water sensor: 0 = level ok, 1 = low water, 2 = offline
+ P_SENSORSTATUSBYTE,    // Sensor Inputs Status Byte: 1 if sensor is working properly, 0 of not
+ P_IOSTATUSBYTE,        // Discrete I/O status byte: shows on/off state if I/O
+ NUM_POOL_DATA_PTS      // Number of data points in pool array xbee packet
+};
 
 byte sensorStatusbyte;          // Each bit determines if sensor is operating properly
 byte ioStatusbyte;              // Each bit shows input value of digital I/O
@@ -89,8 +110,8 @@ char bufferValue[bufferSize]; // enough space to store the string we're going to
 
 const byte statusBufLen = 26;  // character buffer length for controller status text
 
-// format is XivelyDatastream(stream name text, lenght of text, variable type: DATASTREAM_FLOAT, DATASTREAM_INT)
-// for text format is XivelyDatastream(stream name text, lenght of text, variable type: DATASTREAM_BUFFER, bufferValue, bufferSize )
+// format is XivelyDatastream(stream name text, length of stream name, variable type: DATASTREAM_FLOAT, DATASTREAM_INT)
+// for text format is XivelyDatastream(stream name text, lenght of stream name, variable type: DATASTREAM_BUFFER, data as text, length of data as text )
 XivelyDatastream datastreams[] =
 {
   XivelyDatastream( "0", 1, DATASTREAM_FLOAT),  // Pressure before filter
@@ -103,7 +124,7 @@ XivelyDatastream datastreams[] =
   XivelyDatastream( "7", 1, DATASTREAM_FLOAT),  // Pump amps
   XivelyDatastream( "8", 1, DATASTREAM_INT),    // Low Pressure Count
   XivelyDatastream( "9", 1, DATASTREAM_INT),    // Minutes water fill valve was otpen today
-  XivelyDatastream("10", 2, DATASTREAM_BUFFER, bufferValue, bufferSize), // Status of controller - text
+  XivelyDatastream("10", 2, DATASTREAM_BUFFER, bufferValue, bufferSize), // Status of controller.  Only stream where text is sent instead of a number
   XivelyDatastream("11", 2, DATASTREAM_INT),    // Xively upload successes
   XivelyDatastream("12", 2, DATASTREAM_INT),    // Xively Network Failures
   XivelyDatastream("13", 2, DATASTREAM_INT),    // Status of controller - number
@@ -131,7 +152,7 @@ const int NTP_PACKET_SIZE = 48;     // NTP time is in the first 48 bytes of mess
 byte packetBuffer[NTP_PACKET_SIZE]; // buffer to hold incoming & outgoing packets
 
 
-// Xbee Setup stuff
+// Xbee Setup 
 XBee xbee = XBee();
 XBeeResponse response = XBeeResponse();
 // create reusable response objects for responses we expect to handle
@@ -172,16 +193,13 @@ void setup(void)
 {
   delay(1000);
 
-
   Serial.begin(9600);
+  xbee.begin(Serial);
   
   #ifdef PRINT_DEBUG
     Serial.println(F("\nSetup pool controller inside"));
   #endif
   
-  // Initialize XBee
-  xbee.begin(9600);
-
 
   //pinMode(53, OUTPUT);
  // digitalWrite(53, HIGH);
@@ -244,6 +262,7 @@ void loop(void)
   uint16_t xbeeID;                // ID of transimitting xbee
   char msgTweet[TWEETMAXSIZE];    // Holds text for twitter message.  Should be big enough for message and timestamp
   
+  
   // Read XBee data
   // Keep tying to read data until successful.  After 30 tries, give up and move on
   bool xbeeStat;
@@ -301,11 +320,6 @@ void loop(void)
     software_Reset();
   }
   
-  // If PRINT_DEBUG is on, then delay 1000 so you don't fill up the serial monitor too fast
-#ifdef PRINT_DEBUG
-  delay(1000);
-#endif
-  
 } // loop()
 
 
@@ -321,6 +335,7 @@ void sendAlarmMessage()
   static bool tf_highPumpTemp;       // High pump temperature
   static bool tf_emergencyShutdown;  // Emergency shutdown flag
   static bool tf_pumpOnAtNight;      // Pump on at night
+  static bool tf_pumpOffInDay;       // Pump is off during the day
   static bool tf_waterFillOn;        // Water fill valve is on
   static bool tf_heaterIsOn;         // Heater is on
   static bool tf_Xbee_Comm;          // Xbee communication, send alert if no comm
@@ -343,7 +358,7 @@ void sendAlarmMessage()
   
   
   // High pump amps
-  if(PoolData[P_PUMP_AMPS] >= 17 && tf_highAmps == false)
+  if(PoolData[P_PUMP_AMPS] >= 17.0 && tf_highAmps == false)
   {
     tf_highAmps = true;
     sprintf(msgTweet, "High pump amps: %d.", (int) PoolData[P_PUMP_AMPS]);
@@ -351,7 +366,7 @@ void sendAlarmMessage()
   }
   
   // High pump temperature
-  if(PoolData[P_TEMP_PUMP] >= 175 && tf_highPumpTemp == false)
+  if(PoolData[P_TEMP_PUMP] >= 175.0 && tf_highPumpTemp == false)
   {
     tf_highPumpTemp = true;
     sprintf(msgTweet, "High pump temp: %d.", (int) PoolData[P_TEMP_PUMP]);
@@ -359,7 +374,7 @@ void sendAlarmMessage()
   }
   
   // High pressure
-  if(PoolData[P_PRESSURE1] >= 40 && tf_highPressure == false)
+  if(PoolData[P_PRESSURE1] >= 40.0 && tf_highPressure == false)
   {
     tf_highPressure = true;
     sprintf(msgTweet, "High pump pressure: %d.", (int) PoolData[P_PRESSURE1]);
@@ -375,7 +390,7 @@ void sendAlarmMessage()
   }
   
   // Check low pressure Counter
-  if(PoolData[P_LOW_PRES_CNT] >= 17 && tf_lowPressure == false)
+  if(PoolData[P_LOW_PRES_CNT] >= 17.0 && tf_lowPressure == false)
   {
     tf_lowPressure = true;
     strcpy(msgTweet, "Low pressure fluctuations at pool pump.");
@@ -408,14 +423,22 @@ void sendAlarmMessage()
     tf_waterFillOn = true;  // flag so Tweet is only sent once
   }
   
-  // Send Tweet of pump is running at night
-  if(PoolData[P_PUMP_AMPS] > 6 && PoolData[P_POOL_TIME] >= 21 && tf_pumpOnAtNight == false)
+  // Send Tweet if pump is running at night
+  if(PoolData[P_PUMP_AMPS] > 6.0 && PoolData[P_POOL_TIME] >= 21.0 && tf_pumpOnAtNight == false)
   {
     tf_pumpOnAtNight = true;
     strcpy(msgTweet, "Dude, turn off the pool pump");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
-  
+
+  // Send Tweet if pump not running during the day
+  if(PoolData[P_PUMP_AMPS] < 2.0 && PoolData[P_POOL_TIME] > 8.0 && PoolData[P_POOL_TIME] < 17.0 && tf_pumpOffInDay == false)
+  {
+    tf_pumpOffInDay = true;
+    strcpy(msgTweet, "The pool pump is not running");
+    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+  }
+
   // Send tweet when heater comes on.  Don't want this every time, just once a day, so reset at night
   // Determine if Pool heater is on by comparing temperatures
   if(((PoolData[P_TEMP2] - PoolData[P_TEMP1]) > 5.0) && (PoolData[P_PUMP_AMPS] > 5.0) && tf_heaterIsOn == false)
@@ -435,56 +458,56 @@ void sendAlarmMessage()
 
 
   // Send tweet if any sensors are having trouble
-  if ((sensorStatusbyte >> 0) & 1 == 0 && tf_preHeatTemperatureSensor == false )
+  if ( ((sensorStatusbyte >> 0) & 1) == 0 && tf_preHeatTemperatureSensor == false )
   {
     tf_preHeatTemperatureSensor = true;
     strcpy(msgTweet, "Pool pre-heat temperature sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
 
-  if ((sensorStatusbyte >> 1) & 1 == 0 && tf_postHeatTemperatureSensor == false )
+  if ( ((sensorStatusbyte >> 1) & 1) == 0 && tf_postHeatTemperatureSensor == false )
   {
     tf_postHeatTemperatureSensor = true;
     strcpy(msgTweet, "Pool post-heat temperature sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
   
-  if ((sensorStatusbyte >> 2) & 1 == 0 && tf_pumpTemperatureSensor == false )
+  if ( ((sensorStatusbyte >> 2) & 1) == 0 && tf_pumpTemperatureSensor == false )
   {
     tf_pumpTemperatureSensor = true;
     strcpy(msgTweet, "Pool pump temperature sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
   
-  if ((sensorStatusbyte >> 3) & 1 == 0 && tf_preFilterPresureSensor == false )
+  if ( ((sensorStatusbyte >> 3) & 1) == 0 && tf_preFilterPresureSensor == false )
   {
     tf_preFilterPresureSensor = true;
     strcpy(msgTweet, "Pool pre-filter pressure sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
   
-  if ((sensorStatusbyte >> 4) & 1 == 0 && tf_postFilterPressureSensor == false )
+  if ( ((sensorStatusbyte >> 4) & 1) == 0 && tf_postFilterPressureSensor == false )
   {
     tf_postFilterPressureSensor = true;
     strcpy(msgTweet, "Pool post-filter pressure sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
   
-  if ((sensorStatusbyte >> 5) & 1 == 0 && tf_waterFillPressureSensor == false )
+  if ( ((sensorStatusbyte >> 5) & 1) == 0 && tf_waterFillPressureSensor == false )
   {
     tf_waterFillPressureSensor = true;
     strcpy(msgTweet, "Pool water fill pressure sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
   
-  if ((sensorStatusbyte >> 6) & 1 == 0 && tf_pumpAmpsSensor == false )
+  if ( ((sensorStatusbyte >> 6) & 1) == 0 && tf_pumpAmpsSensor == false )
   {
     tf_pumpAmpsSensor = true;
     strcpy(msgTweet, "Pool pump amps sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
   
-  if ((sensorStatusbyte >> 7) & 1 == 0 && tf_waterLevelSensor == false )
+  if ( ((sensorStatusbyte >> 7) & 1) == 0 && tf_waterLevelSensor == false )
   {
     tf_waterLevelSensor = true;
     strcpy(msgTweet, "Pool water level sensor trouble");
@@ -514,11 +537,18 @@ void sendAlarmMessage()
   if(PoolData[P_WATER_FILL_COUNTDN] == 0 && tf_waterFillOn == true)  // Reset water fill timer flag
   { tf_waterFillOn = false; }
 
-  if(PoolData[P_POOL_TIME] < 21 && tf_pumpOnAtNight == true)  // Reset pump running at night flag
-  { tf_pumpOnAtNight = false; }
 
-  if(PoolData[P_POOL_TIME] < 21 && tf_heaterIsOn == true)  // Reset heater on flag
-  { tf_heaterIsOn = false; }
+  // At 11:01 PM reset flags for pump running at night, not running in day, and heater is on
+  if(hour() == 23 && minute() == 1)
+  { 
+    tf_pumpOnAtNight = false; // Reset pump running at night flag
+    tf_pumpOffInDay = false;
+    tf_heaterIsOn = false;    // Reset heater on flag
+  }
+
+  // tf_pumpOffInDay flag can also be reset if pump it turned back on
+  if(PoolData[P_PUMP_AMPS] > 6 )
+  { tf_pumpOffInDay = false; }
 
   
 } // sendAlarmMessage
@@ -530,6 +560,8 @@ void sendAlarmMessage()
 int SendTweet(char * txtTweet, double fpoolTime)
 {
 
+  xively_Upload_Timer = millis() + XIVELY_UPDATE_INTERVAL; // increase timer for Xively so it doesn't send right after Twitter
+
   logDataToSdCard(txtTweet); // update log file
 
   char cpoolTime[19];   // char arry to hold pool time
@@ -538,8 +570,12 @@ int SendTweet(char * txtTweet, double fpoolTime)
   {
 //    sprintf(cpoolTime, " Pool Time: %01d:%02d", int(floor(fpoolTime)), (int)((fpoolTime - floor(fpoolTime)) * 60));
     sprintf(cpoolTime, " Time: %d:%02d", hour(), minute());
-    strcat(txtTweet, cpoolTime);          // Append pool to the message
+    strcat(txtTweet, cpoolTime);          // Append time to the message
   }
+  
+  #ifdef PRINT_DEBUG
+    Serial.println(txtTweet);
+  #endif
   
   if (twitter.post(txtTweet))
   {
@@ -548,6 +584,7 @@ int SendTweet(char * txtTweet, double fpoolTime)
     // int tweetStatus = twitter.wait();
     #ifdef PRINT_DEBUG
       int tweetStatus = twitter.wait(&Serial);
+      Serial.println();
     #else
       int tweetStatus = twitter.wait();
     #endif
@@ -561,7 +598,7 @@ int SendTweet(char * txtTweet, double fpoolTime)
     else
     {
       #ifdef PRINT_DEBUG
-        Serial.print(F("Twitter failed : code "));
+        Serial.print(F("Twitter failed: code "));
         Serial.println(tweetStatus);
       #endif
       return tweetStatus;
@@ -575,15 +612,7 @@ int SendTweet(char * txtTweet, double fpoolTime)
     return 0;
   }
   
-  #ifdef PRINT_DEBUG
-    // Print Tweet to serial monitor
-    Serial.print(F("Tweet: "));
-    Serial.println(txtTweet);
-  #endif
-  
-  xively_Upload_Timer = millis() + XIVELY_UPDATE_INTERVAL; // increase timer for Xively so it doesn't send right after Twitter
-  
-  
+
 } // SendTweet()
 
 
@@ -595,22 +624,21 @@ int SendTweet(char * txtTweet, double fpoolTime)
 bool SendDataToXively()
 {
   
-  
   if (gotNewData == true)
   {
-    if(PoolData[P_PRESSURE1] < 40)  // check for a valid pressure
+    if(PoolData[P_PRESSURE1] < 40.0)  // check for a valid pressure
     { datastreams[0].setFloat(PoolData[P_PRESSURE1]); }  // 0 - Pre-filter pressure
     
-    if(PoolData[P_PRESSURE2] < 40)  // check for a valid pressure
+    if(PoolData[P_PRESSURE2] < 40.0)  // check for a valid pressure
     { datastreams[1].setFloat(PoolData[P_PRESSURE2]); }  // 1- Post-Filter pressure
     
-    if(PoolData[P_PRESSURE3] < 100)  // check for a valid pressure
+    if(PoolData[P_PRESSURE3] < 100.0)  // check for a valid pressure
     { datastreams[2].setFloat(PoolData[P_PRESSURE3]); }  // 2- water fill pressure
     
-    if(PoolData[P_TEMP1] > 40 && PoolData[P_TEMP1] < 150)
+    if(PoolData[P_TEMP1] > 40.0 && PoolData[P_TEMP1] < 150.0)
     { datastreams[3].setFloat(PoolData[P_TEMP1]); }    // 3 - Pre heater temp
     
-    if(PoolData[P_TEMP2] > 40 && PoolData[P_TEMP2] < 150)
+    if(PoolData[P_TEMP2] > 40.0 && PoolData[P_TEMP2] < 150.0)
     { datastreams[4].setFloat(PoolData[P_TEMP2]); }    // 4 - Post heater temp
     
     // Determine if Pool heater is on by comparing temperatures
@@ -619,10 +647,10 @@ bool SendDataToXively()
     else
     { datastreams[5].setInt(0); }
     
-    if(PoolData[P_TEMP_PUMP] > 40 && PoolData[P_TEMP_PUMP] < 300)
+    if(PoolData[P_TEMP_PUMP] > 40.0 && PoolData[P_TEMP_PUMP] < 300.0)
     { datastreams[6].setFloat(PoolData[P_TEMP_PUMP]); } // 6 - Pump temp
     
-    if(PoolData[P_PUMP_AMPS] < 50)
+    if(PoolData[P_PUMP_AMPS] < 50.0)
     { datastreams[7].setFloat(PoolData[P_PUMP_AMPS]); } // 7 - Pump amps
     
     datastreams[8].setInt((int) PoolData[P_LOW_PRES_CNT]); // 8 - Low pressure counter
@@ -797,6 +825,7 @@ bool ReadXBeeData(uint16_t *Tx_Id)
 
 
 //=========================================================================================================
+// Log data to SD Card
 //=========================================================================================================
 bool logDataToSdCard(char * txtComment)
 {

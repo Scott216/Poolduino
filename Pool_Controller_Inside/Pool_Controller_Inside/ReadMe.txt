@@ -6,14 +6,16 @@ It uses an XBee series 1
 
 
 To do:
+Add OLED display
 See if you can update water added today every minute, not just when it's complete it's cycle
 Don't seem to need xbeeID Tx_Id parameter in xbee function
-Create new Xively feed, re-order streams and give them names instead of numbered IDs
-- will need to update alert services
+Add a CRC or checksum to xbee data packet
+  http://forum.arduino.cc/index.php?topic=45742.0
+  
 
 Figure out how to send commands to outside xbee from inside xbee, then see if you can shut pump off from iphone.  Make sure there is confirmation between xbees.
-Turn pump off from iphone/website http://www.yaler.org/
-Instructables for Yaler and Arduino http://www.instructables.com/id/Arduino-Web-LED/step5/Accessing-and-controlling-the-Arduino-from-the-Web/
+  Turn pump off from iphone/website http://www.yaler.org/
+  Instructables for Yaler and Arduino http://www.instructables.com/id/Arduino-Web-LED/step5/Accessing-and-controlling-the-Arduino-from-the-Web/
 
 
 ========================================================================================
