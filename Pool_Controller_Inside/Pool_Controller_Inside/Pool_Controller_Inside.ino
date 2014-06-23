@@ -31,6 +31,10 @@ MOSI  11   51
 MISO  12   50
 SCK   13   52
 
+
+Change Log
+V1.50  06/23/14 - Added missing resets to soem of the twitter flags (tf_).  Got rid of multiple alerts at 11PM.  Added functions for sensor status.  Don't upload streams to xively if sensor is bad or data is invalid.
+
  
 */
 
@@ -160,7 +164,7 @@ Rx16Response rx16 = Rx16Response();
 uint8_t xbeeErrors;      // XBee Rx errors
 bool gotNewData;         // Flag to indicate that sketch has received new data from xbee
 uint32_t xbeeTimeout;    // Counts time between successful Xbee data, if it goes too long, it means we've lost our connection to Xbee
-bool xBeeTimeoutFlag;    // Flag to indicate no date from Xbee, used to keep warning from going off every 5 minutes
+bool xBeeTimeoutFlag;    // Flag to indicate no data from Xbee, used to keep warning from going off every 5 minutes
 
 const int chipSelect = 4;  // Micro SD Card
 
@@ -185,7 +189,14 @@ void controllerStatus(char * txtStatus, int poolstatus);
 void sendNTPpacket(IPAddress &address);
 time_t getNtpTime();
 
-
+bool isPreFltrPressSensorOk();  // srg - remove after these are put in class
+bool isPostFltrPressSensorOk();
+bool isWaterFillPressSensorOk();
+bool isPreHtrTempSensorOk();
+bool isPostHtrTempSensorOk();
+bool isPumpTempSensorOk();
+bool isPumpAmpsSensorOk();
+bool isWaterLevelSensorOk();
 
 //============================================================================
 //============================================================================
@@ -197,7 +208,7 @@ void setup(void)
   xbee.begin(Serial);
   
   #ifdef PRINT_DEBUG
-    Serial.println(F("\nSetup pool controller inside"));
+    Serial.println(F("\nSetup pool controller inside, v1.50"));
   #endif
   
 
@@ -364,7 +375,11 @@ void sendAlarmMessage()
     sprintf(msgTweet, "High pump amps: %d.", (int) PoolData[P_PUMP_AMPS]);
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
-  
+
+  // Reset high amps flag
+  if(PoolData[P_PUMP_AMPS] < 10 && tf_highAmps == true)
+  { tf_highAmps = false; }
+
   // High pump temperature
   if(PoolData[P_TEMP_PUMP] >= 175.0 && tf_highPumpTemp == false)
   {
@@ -372,6 +387,11 @@ void sendAlarmMessage()
     sprintf(msgTweet, "High pump temp: %d.", (int) PoolData[P_TEMP_PUMP]);
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
+
+  // Reset high pump temp flag
+  if(PoolData[P_TEMP_PUMP] < 110 && tf_highPumpTemp == true)
+  { tf_highPumpTemp = false; }
+  
   
   // High pressure
   if(PoolData[P_PRESSURE1] >= 40.0 && tf_highPressure == false)
@@ -380,7 +400,11 @@ void sendAlarmMessage()
     sprintf(msgTweet, "High pump pressure: %d.", (int) PoolData[P_PRESSURE1]);
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
-  
+
+  // Reset high pressure flag
+  if(PoolData[P_PRESSURE1] < 110 && tf_highPressure == true)
+  { tf_highPressure = false; }
+
   // Check pressure drop across filter
   if((PoolData[P_PRESSURE1] > 25.0) && ((PoolData[P_PRESSURE1] - PoolData[P_PRESSURE2]) > 10.0) && (tf_highPresDrop == false))
   {
@@ -388,6 +412,10 @@ void sendAlarmMessage()
     strcpy(msgTweet, "High filter pressure.");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
+
+  // Reset high pressure drop Flag
+  if(PoolData[P_PRESSURE1] < 2 && tf_highPresDrop == true)
+  { tf_highPresDrop = false; }
   
   // Check low pressure Counter
   if(PoolData[P_LOW_PRES_CNT] >= 17.0 && tf_lowPressure == false)
@@ -396,7 +424,11 @@ void sendAlarmMessage()
     strcpy(msgTweet, "Low pressure fluctuations at pool pump.");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
-  
+
+  // Reset low pressure counter flag
+  if(PoolData[P_LOW_PRES_CNT] == 0 && tf_lowPressure == true)
+  { tf_lowPressure = false; }
+
   // Check for emergency shutdown and send tweet
   if(PoolData[P_CONTROLLER_STATUS] >= 4 && tf_emergencyShutdown == false)
   {
@@ -410,21 +442,29 @@ void sendAlarmMessage()
       Serial.println(msgTweet);
     #endif
   }
+
+  // Reset emergency shutdown flag
+  if(PoolData[P_CONTROLLER_STATUS] < 4 && tf_emergencyShutdown == true)
+  { tf_emergencyShutdown = false; }
   
-  // Send Tweet if water fill timer is opened
+  // Send Tweet if water fill has started
   if(PoolData[P_WATER_FILL_COUNTDN] > 1 && tf_waterFillOn == false)
   {
     // Wait a couple seconds in case water fill button is pressed a couple times, then read XBee data again
     delay(2500);
-    uint16_t xbeeID;                // ID of transimitting xbee
+    uint16_t xbeeID;
     ReadXBeeData(&xbeeID);
     sprintf(msgTweet, "Water fill started for %d minutes.", (int) PoolData[P_WATER_FILL_COUNTDN]);
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
     tf_waterFillOn = true;  // flag so Tweet is only sent once
   }
-  
+
+  // Reset water fill timer flag
+  if(PoolData[P_WATER_FILL_COUNTDN] == 0 && tf_waterFillOn == true)
+  { tf_waterFillOn = false; }
+
   // Send Tweet if pump is running at night
-  if(PoolData[P_PUMP_AMPS] > 6.0 && PoolData[P_POOL_TIME] >= 21.0 && tf_pumpOnAtNight == false)
+  if(PoolData[P_PUMP_AMPS] > 6.0 && PoolData[P_POOL_TIME] >= 20.3 && tf_pumpOnAtNight == false)  // 8:30 PM
   {
     tf_pumpOnAtNight = true;
     strcpy(msgTweet, "Dude, turn off the pool pump");
@@ -456,98 +496,123 @@ void sendAlarmMessage()
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
 
+  // Reset xbee communication  flag
+  if(xBeeTimeoutFlag == false && tf_Xbee_Comm == true)
+  { tf_Xbee_Comm = false; }
+
 
   // Send tweet if any sensors are having trouble
-  if ( ((sensorStatusbyte >> 0) & 1) == 0 && tf_preHeatTemperatureSensor == false )
+  
+  // Check pre heater temp sensor
+  if ( !isPreHtrTempSensorOk() && tf_preHeatTemperatureSensor == false )
   {
     tf_preHeatTemperatureSensor = true;
     strcpy(msgTweet, "Pool pre-heat temperature sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
 
-  if ( ((sensorStatusbyte >> 1) & 1) == 0 && tf_postHeatTemperatureSensor == false )
+  // Reset pre heater temp flag
+  if ( isPreHtrTempSensorOk() && tf_preHeatTemperatureSensor )
+  { tf_preHeatTemperatureSensor = false; }
+
+  // Check post heater temp sensor
+  if ( !isPostHtrTempSensorOk() && tf_postHeatTemperatureSensor == false )
   {
     tf_postHeatTemperatureSensor = true;
     strcpy(msgTweet, "Pool post-heat temperature sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
-  
-  if ( ((sensorStatusbyte >> 2) & 1) == 0 && tf_pumpTemperatureSensor == false )
+
+  // Reset post heater temp sensor
+  if ( isPostHtrTempSensorOk() && tf_postHeatTemperatureSensor )
+  { tf_postHeatTemperatureSensor = false; }
+
+  // Check pump temp sensor
+  if ( !isPumpTempSensorOk() && tf_pumpTemperatureSensor == false )
   {
     tf_pumpTemperatureSensor = true;
     strcpy(msgTweet, "Pool pump temperature sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
-  
-  if ( ((sensorStatusbyte >> 3) & 1) == 0 && tf_preFilterPresureSensor == false )
+
+  // Reset pump temp sensor flag
+  if ( isPumpTempSensorOk() && tf_pumpTemperatureSensor )
+  { tf_pumpTemperatureSensor = false; }
+
+  // Check pre filter pressure sensor
+  if ( !isPreFltrPressSensorOk() && tf_preFilterPresureSensor == false )
   {
     tf_preFilterPresureSensor = true;
     strcpy(msgTweet, "Pool pre-filter pressure sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
-  
-  if ( ((sensorStatusbyte >> 4) & 1) == 0 && tf_postFilterPressureSensor == false )
+
+  // Reset pre filter pressure sensor flag
+  if ( isPreFltrPressSensorOk() && tf_preFilterPresureSensor )
+  { tf_preFilterPresureSensor = false; }
+
+  // check post filter pressure sensor
+  if ( !isPostFltrPressSensorOk() && tf_postFilterPressureSensor == false )
   {
     tf_postFilterPressureSensor = true;
     strcpy(msgTweet, "Pool post-filter pressure sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
+
+  // Reset post filter pressure sensor flag
+  if ( isPostFltrPressSensorOk() && tf_postFilterPressureSensor )
+  { tf_postFilterPressureSensor = false; }
+
   
-  if ( ((sensorStatusbyte >> 5) & 1) == 0 && tf_waterFillPressureSensor == false )
+  // Check water fill pressure sensor
+  if ( !isWaterFillPressSensorOk() && tf_waterFillPressureSensor == false )
   {
     tf_waterFillPressureSensor = true;
     strcpy(msgTweet, "Pool water fill pressure sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
-  
-  if ( ((sensorStatusbyte >> 6) & 1) == 0 && tf_pumpAmpsSensor == false )
+
+  // Reset water fill pressure sensor flag
+  if ( isWaterFillPressSensorOk() && tf_waterFillPressureSensor )
+  { tf_waterFillPressureSensor = false; }
+
+  // Check pump amps sensor
+  if ( !isPumpAmpsSensorOk() && tf_pumpAmpsSensor == false )
   {
     tf_pumpAmpsSensor = true;
     strcpy(msgTweet, "Pool pump amps sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
   
-  if ( ((sensorStatusbyte >> 7) & 1) == 0 && tf_waterLevelSensor == false )
+  // Reset pump amps sensor flag
+  if ( isPumpAmpsSensorOk() && tf_pumpAmpsSensor )
+  { tf_pumpAmpsSensor = false; }
+
+
+  // check water level sensor
+  if ( !isWaterLevelSensorOk() && tf_waterLevelSensor == false )
   {
     tf_waterLevelSensor = true;
     strcpy(msgTweet, "Pool water level sensor trouble");
     SendTweet(msgTweet, PoolData[P_POOL_TIME]);
   }
   
-  
-  // Reset one-shot message flags
-  if(PoolData[P_PUMP_AMPS] < 10 && tf_highAmps == true)  // Reset high amps flag
-  { tf_highAmps = false; }
-  
-  if(PoolData[P_TEMP_PUMP] < 110 && tf_highPumpTemp == true)  // Reset high pump temp flag
-  { tf_highPumpTemp = false; }
-  
-  if(PoolData[P_PRESSURE1] < 110 && tf_highPressure == true)  // Reset high pressure flag
-  { tf_highPressure = false; }
-  
-  if(PoolData[P_PRESSURE1] < 2 && tf_highPresDrop == true)  // Reset high pressure drop Flag
-  { tf_highPresDrop = false; }
-  
-  if(PoolData[P_LOW_PRES_CNT] == 0 && tf_lowPressure == true) // Reset low pressure counter flag
-  { tf_lowPressure = false; }
-  
-  if(PoolData[P_CONTROLLER_STATUS] < 4 && tf_emergencyShutdown == true)  // Reset emergency shutdown flag
-  { tf_emergencyShutdown = false; }
-  
-  if(PoolData[P_WATER_FILL_COUNTDN] == 0 && tf_waterFillOn == true)  // Reset water fill timer flag
-  { tf_waterFillOn = false; }
-
+  // Reset water Level Sensor flag
+  if ( isWaterLevelSensorOk() && tf_waterLevelSensor )
+  { tf_waterLevelSensor = false; }
 
   // At 11:01 PM reset flags for pump running at night, not running in day, and heater is on
-  if(hour() == 23 && minute() == 1)
-  { 
-    tf_pumpOnAtNight = false; // Reset pump running at night flag
+  if(hour() == 23 && minute() == 1 && second() < 10 )
+  {
+    // Reset twitter flags
+    tf_pumpOnAtNight = false;
     tf_pumpOffInDay = false;
-    tf_heaterIsOn = false;    // Reset heater on flag
+    tf_heaterIsOn = false;
+    delay(10000); // delay 10 seconds to prevent multiple tweets from going out
   }
 
   // tf_pumpOffInDay flag can also be reset if pump it turned back on
-  if(PoolData[P_PUMP_AMPS] > 6 )
+  if(PoolData[P_PUMP_AMPS] > 6 && ((sensorStatusbyte >> 6) & 1) == 1)
   { tf_pumpOffInDay = false; }
 
   
@@ -623,34 +688,50 @@ int SendTweet(char * txtTweet, double fpoolTime)
 //======================================================================================================================================
 bool SendDataToXively()
 {
+
+  /*
+   bool isPreFltrPressSensorOk();
+   bool isPostFltrPressSensorOk();
+   bool isWaterFillPressSensorOk();
+   bool isPreHtrTempSensorOk();
+   bool isPostHtrTempSensorOk();
+   bool isPumpTempSensorOk();
+   bool isPumpAmpsSensorOk();
+   bool isWaterLevelSensorOk();
+   */
   
-  if (gotNewData == true)
+
+  if ( gotNewData == true && xBeeTimeoutFlag == false )
   {
-    if(PoolData[P_PRESSURE1] < 40.0)  // check for a valid pressure
+    // Only send data out if it's in a valid range and sensor is working
+    if(PoolData[P_PRESSURE1] < 40.0 && isPreFltrPressSensorOk() )
     { datastreams[0].setFloat(PoolData[P_PRESSURE1]); }  // 0 - Pre-filter pressure
     
-    if(PoolData[P_PRESSURE2] < 40.0)  // check for a valid pressure
+    if(PoolData[P_PRESSURE2] < 40.0 && isPostFltrPressSensorOk() )
     { datastreams[1].setFloat(PoolData[P_PRESSURE2]); }  // 1- Post-Filter pressure
     
-    if(PoolData[P_PRESSURE3] < 100.0)  // check for a valid pressure
+    if(PoolData[P_PRESSURE3] < 100.0 && isWaterFillPressSensorOk() )
     { datastreams[2].setFloat(PoolData[P_PRESSURE3]); }  // 2- water fill pressure
     
-    if(PoolData[P_TEMP1] > 40.0 && PoolData[P_TEMP1] < 150.0)
+    if(PoolData[P_TEMP1] > 40.0 && PoolData[P_TEMP1] < 150.0 && isPreHtrTempSensorOk() )
     { datastreams[3].setFloat(PoolData[P_TEMP1]); }    // 3 - Pre heater temp
     
-    if(PoolData[P_TEMP2] > 40.0 && PoolData[P_TEMP2] < 150.0)
+    if(PoolData[P_TEMP2] > 40.0 && PoolData[P_TEMP2] < 150.0 && isPostHtrTempSensorOk() )
     { datastreams[4].setFloat(PoolData[P_TEMP2]); }    // 4 - Post heater temp
     
     // Determine if Pool heater is on by comparing temperatures
-    if(((PoolData[P_TEMP2] - PoolData[P_TEMP1]) > 5.0) && (PoolData[P_PUMP_AMPS] > 5.0))
-    { datastreams[5].setInt(1); }              // 5 - Heater status On/Off
-    else
-    { datastreams[5].setInt(0); }
+    if( isPreHtrTempSensorOk() && isPostHtrTempSensorOk() && isPumpAmpsSensorOk() )
+    {
+      if(((PoolData[P_TEMP2] - PoolData[P_TEMP1]) > 5.0) && (PoolData[P_PUMP_AMPS] > 5.0)  )
+      { datastreams[5].setInt(1); }              // 5 - Heater status On/Off
+      else
+      { datastreams[5].setInt(0); }
+    }
     
-    if(PoolData[P_TEMP_PUMP] > 40.0 && PoolData[P_TEMP_PUMP] < 300.0)
+    if(PoolData[P_TEMP_PUMP] > 40.0 && PoolData[P_TEMP_PUMP] < 300.0 && isPumpTempSensorOk() )
     { datastreams[6].setFloat(PoolData[P_TEMP_PUMP]); } // 6 - Pump temp
     
-    if(PoolData[P_PUMP_AMPS] < 50.0)
+    if(PoolData[P_PUMP_AMPS] < 50.0 && isPumpAmpsSensorOk() )
     { datastreams[7].setFloat(PoolData[P_PUMP_AMPS]); } // 7 - Pump amps
     
     datastreams[8].setInt((int) PoolData[P_LOW_PRES_CNT]); // 8 - Low pressure counter
@@ -659,15 +740,17 @@ bool SendDataToXively()
     
     datastreams[13].setInt((int) PoolData[P_CONTROLLER_STATUS]); // 13 - Controller status code number
     
-    datastreams[14].setInt(PoolData[P_LOW_WATER] ); // 14 - water level sensor - Calculated
-    
-    datastreams[15].setFloat(PoolData[P_WATER_LVL_BATT]/1000.0); // 15 - battery volts for water level sensor
+    if ( isWaterLevelSensorOk() )
+    {
+      datastreams[14].setInt(PoolData[P_LOW_WATER] ); // 14 - water level sensor - Calculated
+      datastreams[15].setFloat(PoolData[P_WATER_LVL_BATT]/1000.0); // 15 - battery volts for water level sensor
+    }
     
   } // if gotNewData
   
   gotNewData = false; // reset got xbee data flag
   
-  if(xBeeTimeoutFlag == true)
+  if( xBeeTimeoutFlag == true )
   { // No communication with XBEE
     Serial.println(F("No Xbee Comm"));
     datastreams[10].setBuffer("NO XBEE COMM");  // 10 - Controller status - sends text to Xively, not numbers
@@ -969,7 +1052,17 @@ void PrintPoolData()
   Serial.print(F("\t"));
   Serial.print(ioStatusbyte, BIN);
   Serial.println();
-  
+/*  
+  Serial.print(isPreFltrPressSensorOk()); 
+  Serial.print(isPostFltrPressSensorOk());
+  Serial.print(isWaterFillPressSensorOk());
+  Serial.print(isPreHtrTempSensorOk());
+  Serial.print(isPostHtrTempSensorOk());
+  Serial.print(isPumpTempSensorOk());
+  Serial.print(isPumpAmpsSensorOk());
+  Serial.print(isWaterLevelSensorOk());
+  Serial.println(); 
+*/  
 } // PrintPoolData()
 
 
@@ -1098,5 +1191,51 @@ void sendNTPpacket(IPAddress &address)
   Udp.write(packetBuffer, NTP_PACKET_SIZE);
   Udp.endPacket();
 }  // sendNTPpacket()
+
+
+
+// SRG - Move these to the class library when you build that out
+// Check pre filter pressure sensor
+bool isPreFltrPressSensorOk()
+{
+  return ((sensorStatusbyte >> 3) & 1);
+}
+
+bool isPostFltrPressSensorOk()
+{
+  return ((sensorStatusbyte >> 4) & 1);
+}
+
+bool isWaterFillPressSensorOk()
+{
+  return ((sensorStatusbyte >> 5) & 1);
+}
+
+bool isPreHtrTempSensorOk()
+{
+  return ((sensorStatusbyte >> 0) & 1);
+}
+
+bool isPostHtrTempSensorOk()
+{
+  return ((sensorStatusbyte >> 1) & 1);
+}
+
+bool isPumpTempSensorOk()
+{
+  return ((sensorStatusbyte >> 2) & 1);
+}
+
+bool isPumpAmpsSensorOk()
+{
+  return ((sensorStatusbyte >> 6) & 1);
+}
+
+bool isWaterLevelSensorOk()
+{
+  return ((sensorStatusbyte >> 7) & 1);
+}
+
+
 
 

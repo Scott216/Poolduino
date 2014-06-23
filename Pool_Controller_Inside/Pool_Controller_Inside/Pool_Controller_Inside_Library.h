@@ -34,7 +34,16 @@ public:
     uint8_t getStatus();              // indicates status of pool: pump on, off, alarms etc.
     uint8_t getLowPressureCounter();  // Counts pressure fluctuations when pump is starved for water
     
-    
+    /// Sensors okay status
+    bool isPreFltrPressSensorOk();
+    bool isPostFltrPressSensorOk();
+    bool isWaterFillPressSensorOk();
+    bool isPreHtrTempSensorOk();
+    bool isPosthtrTempSensorOk();
+    bool isPumpTempSensorOk();
+    bool isPumpAmpsSensorOk();
+    bool isWaterLevelSensorOk();
+ 
     
 protected:
     float tempPreHeat;
