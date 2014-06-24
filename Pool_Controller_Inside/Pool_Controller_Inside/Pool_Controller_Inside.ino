@@ -33,7 +33,8 @@ SCK   13   52
 
 
 Change Log
-V1.50  06/23/14 - Added missing resets to soem of the twitter flags (tf_).  Got rid of multiple alerts at 11PM.  Added functions for sensor status.  Don't upload streams to xively if sensor is bad or data is invalid.
+V1.50  06/23/14 - Added missing resets to some of the twitter flags (tf_).  Got rid of multiple alerts at 11PM.  Added functions for sensor status.  Don't upload streams to xively if sensor is bad or data is invalid.
+v1.51  06/23/14 -  If sensor isn't working, sent n/a to SD card instead of last known value
 
  
 */
@@ -208,7 +209,7 @@ void setup(void)
   xbee.begin(Serial);
   
   #ifdef PRINT_DEBUG
-    Serial.println(F("\nSetup pool controller inside, v1.50"));
+    Serial.println(F("\nSetup pool controller inside, v1.51"));
   #endif
   
 
@@ -948,19 +949,19 @@ bool logDataToSdCard(char * txtComment)
     dataFile.print(F("\t"));
     dataFile.print(PoolData[P_POOL_TIME],2);
     dataFile.print(F("\t"));
-    dataFile.print(PoolData[P_TEMP1],1);
+    ( isPreHtrTempSensorOk() )     ? dataFile.print(PoolData[P_TEMP1],1)     : dataFile.print(F("n/a"));
     dataFile.print(F("\t"));
-    dataFile.print(PoolData[P_TEMP2],1);
+    ( isPostHtrTempSensorOk() )    ? dataFile.print(PoolData[P_TEMP2],1)     : dataFile.print(F("n/a"));
     dataFile.print(F("\t"));
-    dataFile.print(PoolData[P_TEMP_PUMP],1);
+    ( isPumpTempSensorOk() )       ? dataFile.print(PoolData[P_TEMP_PUMP],1) : dataFile.print(F("n/a"));
     dataFile.print(F("\t"));
-    dataFile.print(PoolData[P_PUMP_AMPS],1);
+    ( isPumpAmpsSensorOk() )       ? dataFile.print(PoolData[P_PUMP_AMPS],1) : dataFile.print(F("n/a"));
     dataFile.print(F("\t"));
-    dataFile.print(PoolData[P_PRESSURE1],1);
+    ( isPreFltrPressSensorOk() )   ? dataFile.print(PoolData[P_PRESSURE1],1) : dataFile.print(F("n/a"));
     dataFile.print(F("\t"));
-    dataFile.print(PoolData[P_PRESSURE2],1);
+    ( isPostFltrPressSensorOk() )  ? dataFile.print(PoolData[P_PRESSURE2],1) : dataFile.print(F("n/a"));
     dataFile.print(F("\t"));
-    dataFile.print(PoolData[P_PRESSURE3],1);
+    ( isWaterFillPressSensorOk() ) ? dataFile.print(PoolData[P_PRESSURE3],1) : dataFile.print(F("n/a"));
     dataFile.print(F("\t"));
     dataFile.print(PoolData[P_LOW_PRES_CNT],0);
     dataFile.print(F("\t"));
