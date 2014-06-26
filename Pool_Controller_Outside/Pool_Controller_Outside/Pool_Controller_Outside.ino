@@ -1,5 +1,13 @@
-// with pre-filter pressure sensor disconnected, ADC reads around 400, 
-// with water fill sensor diconnected, it reads in the 200s
+/* 
+ Uses Arduino Leo with Xbee, RTC and panStamp
+
+ with pre-filter pressure sensor disconnected, ADC reads around 400, 
+ with water fill sensor diconnected, it reads in the 200s
+
+Changelog
+v1.50 10/25/14 - Added delay in pump off to stop false positives for pump amp sensor status
+
+*/
 
 #include "Arduino.h"
 #include "Pool_Controller_Outside_Library.h"
@@ -234,7 +242,7 @@ void setup ()
 //  startupLowPressFlag == false;  // Reset flag
   
 #ifdef PRINT_DEBUG
-  Serial.println(F("Finished setup()"));
+  Serial.println(F("Finished setup() v 1.50"));
 #endif
   
   
@@ -446,10 +454,9 @@ void loop ()
   
   // Turn pump on if:
   //   It's daytome and pump switch is in auto
-  //   Or Pump switch is in manual on
+  //   Or Pump switch is in manual mode
   if(((poolTime >= PUMP_ON_TIME) && (poolTime <= PUMP_OFF_TIME) && (digitalRead(PUMP_INPUT_AUTO) == PUMP_SWITCH_ON) && (EmergencyShutdown == 0)) || (digitalRead(PUMP_INPUT_MAN) == PUMP_SWITCH_ON))
-  {
-    // Turn Pump On
+  { // Turn Pump On
     digitalWrite(PUMP_OUTPUT, HIGH);
     if(poolStatus <= statusPumpSwitchOff)
      { poolStatus = statusPumpOn; }   // set pool status to Pump On, don't override higher status codes
@@ -457,6 +464,8 @@ void loop ()
   else
   { // Turn Pump off
     digitalWrite(PUMP_OUTPUT, LOW);
+    if ( PumpAmps > 3 )
+    { delay(500); } // give pump some time to turn off so we don't get false alarms for sensor status
     if(poolStatus <= statusPumpSwitchOff)
      { poolStatus = statusPumpOff; }  // set pool status to Pump Off, don't override higher status codes
   }
