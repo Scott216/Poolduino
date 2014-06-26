@@ -35,7 +35,7 @@ SCK   13   52
 Change Log
 V1.50  06/23/14 - Added missing resets to some of the twitter flags (tf_).  Got rid of multiple alerts at 11PM.  Added functions for sensor status.  Don't upload streams to xively if sensor is bad or data is invalid.
 v1.51  06/23/14 -  If sensor isn't working, sent n/a to SD card instead of last known value
-
+v1.52  06/25/14 - Added bitly url to tweet
  
 */
 
@@ -102,7 +102,7 @@ byte ioStatusbyte;              // Each bit shows input value of digital I/O
 // Xively Stream IDs
 #define NUM_XIVELY_STREAMS  16
 
-const byte TWEETMAXSIZE =                   60;   // Character array size for twitter message
+const byte TWEETMAXSIZE =                   75;   // Character array size for twitter message
 const uint32_t XIVELY_UPDATE_INTERVAL =  15000;   // Xively upload interval (mS)
 const uint32_t XIVELY_UPDATE_TIMEOUT = 1800000;   // 30 minute timeout - if there are no successful updates in 30 minutes, reboot
 #define FEED_ID                  65673   // Xively Feed ID http://xively.com/feeds/65673/workbench
@@ -209,7 +209,7 @@ void setup(void)
   xbee.begin(Serial);
   
   #ifdef PRINT_DEBUG
-    Serial.println(F("\nSetup pool controller inside, v1.51"));
+    Serial.println(F("\nSetup pool controller inside, v1.52"));
   #endif
   
 
@@ -622,20 +622,22 @@ void sendAlarmMessage()
 
 //=========================================================================================================
 // Send twitter text, appends the time to the message to avoid twitter blocking duplicate messages
+// bitly link to xively: bit.ly/1vapvvo
 //=========================================================================================================
 int SendTweet(char * txtTweet, double fpoolTime)
 {
-
+  const uint8_t TIMESTAMP_LEN = 20; 
+  
   xively_Upload_Timer = millis() + XIVELY_UPDATE_INTERVAL; // increase timer for Xively so it doesn't send right after Twitter
 
   logDataToSdCard(txtTweet); // update log file
 
   char cpoolTime[19];   // char arry to hold pool time
   
-  if(strlen(txtTweet) <= TWEETMAXSIZE - 20) // Make sure message there is room in character array for the timestamp
+  if(strlen(txtTweet) <= TWEETMAXSIZE - TIMESTAMP_LEN) // Make sure message there is room in character array for the timestamp
   {
 //    sprintf(cpoolTime, " Pool Time: %01d:%02d", int(floor(fpoolTime)), (int)((fpoolTime - floor(fpoolTime)) * 60));
-    sprintf(cpoolTime, " Time: %d:%02d", hour(), minute());
+    sprintf(cpoolTime, " Time: %d:%02d\n bit.ly/1vapvvo", hour(), minute());
     strcat(txtTweet, cpoolTime);          // Append time to the message
   }
   
