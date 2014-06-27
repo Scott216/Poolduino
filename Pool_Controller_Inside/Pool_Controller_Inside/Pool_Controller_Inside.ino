@@ -36,6 +36,10 @@ Change Log
 V1.50  06/23/14 - Added missing resets to some of the twitter flags (tf_).  Got rid of multiple alerts at 11PM.  Added functions for sensor status.  Don't upload streams to xively if sensor is bad or data is invalid.
 v1.51  06/23/14 -  If sensor isn't working, sent n/a to SD card instead of last known value
 v1.52  06/25/14 - Added bitly url to tweet
+v1.53  06/26/14 - Fixed char overflow, removed pooltime from sendTweet() function.  When alarm is triggered, record will be saved to SD card
+                  Changed Xbee timeout from 5 min to 30 sec
+
+To Do: twitter alarm if can't connect to xively
  
 */
 
@@ -102,7 +106,7 @@ byte ioStatusbyte;              // Each bit shows input value of digital I/O
 // Xively Stream IDs
 #define NUM_XIVELY_STREAMS  16
 
-const byte TWEETMAXSIZE =                   75;   // Character array size for twitter message
+const byte STRLEN_MAX_TWEET =                   75;   // Character array size for twitter message
 const uint32_t XIVELY_UPDATE_INTERVAL =  15000;   // Xively upload interval (mS)
 const uint32_t XIVELY_UPDATE_TIMEOUT = 1800000;   // 30 minute timeout - if there are no successful updates in 30 minutes, reboot
 #define FEED_ID                  65673   // Xively Feed ID http://xively.com/feeds/65673/workbench
@@ -167,6 +171,7 @@ bool gotNewData;         // Flag to indicate that sketch has received new data f
 uint32_t xbeeTimeout;    // Counts time between successful Xbee data, if it goes too long, it means we've lost our connection to Xbee
 bool xBeeTimeoutFlag;    // Flag to indicate no data from Xbee, used to keep warning from going off every 5 minutes
 
+const uint32_t XBEETIMEOUT = 30000; // 30 seconds
 const int chipSelect = 4;  // Micro SD Card
 
 // Twitter setup
@@ -184,7 +189,7 @@ bool SendDataToXively();
 bool ReadXBeeData(uint16_t *Tx_Id);
 bool logDataToSdCard(char msgComment[]);
 void sendAlarmMessage();
-int SendTweet(char msgTweet[], double fpoolTime);
+int SendTweet(char msgTweet[]);
 int freeRam(bool PrintRam);
 void controllerStatus(char * txtStatus, int poolstatus);
 void sendNTPpacket(IPAddress &address);
@@ -209,7 +214,7 @@ void setup(void)
   xbee.begin(Serial);
   
   #ifdef PRINT_DEBUG
-    Serial.println(F("\nSetup pool controller inside, v1.52"));
+    Serial.println(F("\nSetup pool controller inside, v1.53"));
   #endif
   
 
@@ -255,7 +260,7 @@ void setup(void)
   xively_Upload_Timer       = millis() + XIVELY_UPDATE_INTERVAL;
   
   
-  xbeeTimeout       = millis() + 300000UL; // 5 minutes
+  xbeeTimeout       = millis() + XBEETIMEOUT;  // Initialize xbee timeout
   xBeeTimeoutFlag   = false;
   gotNewData        = false;  // Initialize, true when new we receive new data from xbee, is reset when it uploads to Xively
   
@@ -272,7 +277,7 @@ void setup(void)
 void loop(void)
 {
   uint16_t xbeeID;                // ID of transimitting xbee
-  char msgTweet[TWEETMAXSIZE];    // Holds text for twitter message.  Should be big enough for message and timestamp
+  char msgTweet[STRLEN_MAX_TWEET];    // Holds text for twitter message.  Should be big enough for message and timestamp
   
   
   // Read XBee data
@@ -291,7 +296,7 @@ void loop(void)
   if (tweetstartup == false && millis() > 20000UL)
   {
     strcpy(msgTweet, "Inside pool monitor has restarted.");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    SendTweet(msgTweet);
     tweetstartup = true;
   }
   
@@ -300,10 +305,10 @@ void loop(void)
   {
     xBeeTimeoutFlag = true;
     #ifdef PRINT_DEBUG
-      Serial.println(F("No Rx data from XBee in 5 min"));
+      Serial.println(F("No Rx data from XBee"));
     #else
       strcpy(msgTweet, "Lost XBee communication.");
-      SendTweet(msgTweet, poolData[P_POOL_TIME]);
+      SendTweet(msgTweet);
     #endif
   }
   
@@ -326,7 +331,7 @@ void loop(void)
   if((long) (millis() - xively_uploadTimout_timer) >= 0)
   {
     strcpy(msgTweet, "Reboot: can't upload to Xively.");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    SendTweet(msgTweet);
     xively_uploadTimout_timer = millis() + XIVELY_UPDATE_TIMEOUT;
     delay(1000);
     software_Reset();
@@ -361,7 +366,7 @@ void sendAlarmMessage()
   static bool tf_pumpAmpsSensor;
   static bool tf_waterLevelSensor;
   
-  char msgTweet[TWEETMAXSIZE];    // Holds text for twitter message.  Should be big enough for message and timestamp
+  char msgAlarm[STRLEN_MAX_TWEET];    // Holds text for twitter message.  Should be big enough for message and timestamp
 
   // If Arduino recently restarted (last 10 seconds), set waterFillCntDnFlag to true so it
   // doesn't send a tweet if the water fill is on
@@ -373,8 +378,9 @@ void sendAlarmMessage()
   if(PoolData[P_PUMP_AMPS] >= 17.0 && tf_highAmps == false)
   {
     tf_highAmps = true;
-    sprintf(msgTweet, "High pump amps: %d.", (int) PoolData[P_PUMP_AMPS]);
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    sprintf(msgAlarm, "High pump amps: %d.", (int) PoolData[P_PUMP_AMPS]);
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Reset high amps flag
@@ -385,8 +391,9 @@ void sendAlarmMessage()
   if(PoolData[P_TEMP_PUMP] >= 175.0 && tf_highPumpTemp == false)
   {
     tf_highPumpTemp = true;
-    sprintf(msgTweet, "High pump temp: %d.", (int) PoolData[P_TEMP_PUMP]);
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    sprintf(msgAlarm, "High pump temp: %d.", (int) PoolData[P_TEMP_PUMP]);
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Reset high pump temp flag
@@ -398,8 +405,9 @@ void sendAlarmMessage()
   if(PoolData[P_PRESSURE1] >= 40.0 && tf_highPressure == false)
   {
     tf_highPressure = true;
-    sprintf(msgTweet, "High pump pressure: %d.", (int) PoolData[P_PRESSURE1]);
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    sprintf(msgAlarm, "High pump pressure: %d.", (int) PoolData[P_PRESSURE1]);
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Reset high pressure flag
@@ -410,8 +418,9 @@ void sendAlarmMessage()
   if((PoolData[P_PRESSURE1] > 25.0) && ((PoolData[P_PRESSURE1] - PoolData[P_PRESSURE2]) > 10.0) && (tf_highPresDrop == false))
   {
     tf_highPresDrop = true;
-    strcpy(msgTweet, "High filter pressure.");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "High filter pressure.");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Reset high pressure drop Flag
@@ -422,8 +431,9 @@ void sendAlarmMessage()
   if(PoolData[P_LOW_PRES_CNT] >= 17.0 && tf_lowPressure == false)
   {
     tf_lowPressure = true;
-    strcpy(msgTweet, "Low pressure fluctuations at pool pump.");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "Low pressure fluctuations at pool pump.");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Reset low pressure counter flag
@@ -435,12 +445,13 @@ void sendAlarmMessage()
   {
     char txtStatus[statusBufLen];
     tf_emergencyShutdown = true;
-    strcpy(msgTweet, "Emergency Shutdown - ");
+    strcpy(msgAlarm, "Emergency Shutdown - ");
     controllerStatus(txtStatus,  PoolData[P_CONTROLLER_STATUS]);
-    strcat(msgTweet, txtStatus);
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcat(msgAlarm, txtStatus);
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
     #ifdef PRINT_DEBUG
-      Serial.println(msgTweet);
+      Serial.println(msgAlarm);
     #endif
   }
 
@@ -455,8 +466,9 @@ void sendAlarmMessage()
     delay(2500);
     uint16_t xbeeID;
     ReadXBeeData(&xbeeID);
-    sprintf(msgTweet, "Water fill started for %d minutes.", (int) PoolData[P_WATER_FILL_COUNTDN]);
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    sprintf(msgAlarm, "Water fill started for %d minutes.", (int) PoolData[P_WATER_FILL_COUNTDN]);
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
     tf_waterFillOn = true;  // flag so Tweet is only sent once
   }
 
@@ -468,16 +480,18 @@ void sendAlarmMessage()
   if(PoolData[P_PUMP_AMPS] > 6.0 && PoolData[P_POOL_TIME] >= 20.3 && tf_pumpOnAtNight == false)  // 8:30 PM
   {
     tf_pumpOnAtNight = true;
-    strcpy(msgTweet, "Dude, turn off the pool pump");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "Dude, turn off the pool pump");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Send Tweet if pump not running during the day
   if(PoolData[P_PUMP_AMPS] < 2.0 && PoolData[P_POOL_TIME] > 8.0 && PoolData[P_POOL_TIME] < 17.0 && tf_pumpOffInDay == false)
   {
     tf_pumpOffInDay = true;
-    strcpy(msgTweet, "The pool pump is not running");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "The pool pump is not running");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Send tweet when heater comes on.  Don't want this every time, just once a day, so reset at night
@@ -485,16 +499,18 @@ void sendAlarmMessage()
   if(((PoolData[P_TEMP2] - PoolData[P_TEMP1]) > 5.0) && (PoolData[P_PUMP_AMPS] > 5.0) && tf_heaterIsOn == false)
   {
     tf_heaterIsOn = true;
-    strcpy(msgTweet, "Pool heater is on");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "Pool heater is on");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Send alert if xbee communication is lost
   if(xBeeTimeoutFlag && tf_Xbee_Comm == false)
   {
     tf_Xbee_Comm = true;
-    strcpy(msgTweet, "Lost xBee communication");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "Lost xBee communication");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Reset xbee communication  flag
@@ -508,8 +524,9 @@ void sendAlarmMessage()
   if ( !isPreHtrTempSensorOk() && tf_preHeatTemperatureSensor == false )
   {
     tf_preHeatTemperatureSensor = true;
-    strcpy(msgTweet, "Pool pre-heat temperature sensor trouble");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "Pool pre-heat temperature sensor trouble");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Reset pre heater temp flag
@@ -520,8 +537,9 @@ void sendAlarmMessage()
   if ( !isPostHtrTempSensorOk() && tf_postHeatTemperatureSensor == false )
   {
     tf_postHeatTemperatureSensor = true;
-    strcpy(msgTweet, "Pool post-heat temperature sensor trouble");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "Pool post-heat temperature sensor trouble");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Reset post heater temp sensor
@@ -532,8 +550,9 @@ void sendAlarmMessage()
   if ( !isPumpTempSensorOk() && tf_pumpTemperatureSensor == false )
   {
     tf_pumpTemperatureSensor = true;
-    strcpy(msgTweet, "Pool pump temperature sensor trouble");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "Pool pump temperature sensor trouble");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Reset pump temp sensor flag
@@ -544,8 +563,9 @@ void sendAlarmMessage()
   if ( !isPreFltrPressSensorOk() && tf_preFilterPresureSensor == false )
   {
     tf_preFilterPresureSensor = true;
-    strcpy(msgTweet, "Pool pre-filter pressure sensor trouble");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "Pool pre-filter pressure sensor trouble");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Reset pre filter pressure sensor flag
@@ -556,8 +576,9 @@ void sendAlarmMessage()
   if ( !isPostFltrPressSensorOk() && tf_postFilterPressureSensor == false )
   {
     tf_postFilterPressureSensor = true;
-    strcpy(msgTweet, "Pool post-filter pressure sensor trouble");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "Pool post-filter pressure sensor trouble");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Reset post filter pressure sensor flag
@@ -569,8 +590,9 @@ void sendAlarmMessage()
   if ( !isWaterFillPressSensorOk() && tf_waterFillPressureSensor == false )
   {
     tf_waterFillPressureSensor = true;
-    strcpy(msgTweet, "Pool water fill pressure sensor trouble");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "Pool water fill pressure sensor trouble");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
 
   // Reset water fill pressure sensor flag
@@ -581,8 +603,9 @@ void sendAlarmMessage()
   if ( !isPumpAmpsSensorOk() && tf_pumpAmpsSensor == false )
   {
     tf_pumpAmpsSensor = true;
-    strcpy(msgTweet, "Pool pump amps sensor trouble");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "Pool pump amps sensor trouble");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
   
   // Reset pump amps sensor flag
@@ -594,8 +617,9 @@ void sendAlarmMessage()
   if ( !isWaterLevelSensorOk() && tf_waterLevelSensor == false )
   {
     tf_waterLevelSensor = true;
-    strcpy(msgTweet, "Pool water level sensor trouble");
-    SendTweet(msgTweet, PoolData[P_POOL_TIME]);
+    strcpy(msgAlarm, "Pool water level sensor trouble");
+    logDataToSdCard(msgAlarm); 
+    SendTweet(msgAlarm);
   }
   
   // Reset water Level Sensor flag
@@ -624,17 +648,18 @@ void sendAlarmMessage()
 // Send twitter text, appends the time to the message to avoid twitter blocking duplicate messages
 // bitly link to xively: bit.ly/1vapvvo
 //=========================================================================================================
-int SendTweet(char * txtTweet, double fpoolTime)
+int SendTweet(char * txtTweet)
 {
-  const uint8_t TIMESTAMP_LEN = 20; 
+  const uint8_t STRLEN_TIMESTAMP = 20; 
+  const uint8_t STRLEN_BITLY = 15;
   
   xively_Upload_Timer = millis() + XIVELY_UPDATE_INTERVAL; // increase timer for Xively so it doesn't send right after Twitter
 
   logDataToSdCard(txtTweet); // update log file
 
-  char cpoolTime[19];   // char arry to hold pool time
+  char cpoolTime[STRLEN_TIMESTAMP + STRLEN_BITLY];   // char arry to hold pool time & bitly URL
   
-  if(strlen(txtTweet) <= TWEETMAXSIZE - TIMESTAMP_LEN) // Make sure message there is room in character array for the timestamp
+  if(strlen(txtTweet) <= STRLEN_MAX_TWEET - STRLEN_TIMESTAMP - STRLEN_BITLY) // Make sure message there is room in character array for the timestamp & bitly
   {
 //    sprintf(cpoolTime, " Pool Time: %01d:%02d", int(floor(fpoolTime)), (int)((fpoolTime - floor(fpoolTime)) * 60));
     sprintf(cpoolTime, " Time: %d:%02d\n bit.ly/1vapvvo", hour(), minute());
@@ -867,7 +892,7 @@ bool ReadXBeeData(uint16_t *Tx_Id)
       ioStatusbyte = PoolData[P_IOSTATUSBYTE];            // I/O state of digital I/O
       
       gotNewData = true;
-      xbeeTimeout = millis() + 300000UL; // Reset xbee timeout timer, 5 minutes
+      xbeeTimeout = millis() + XBEETIMEOUT; // Reset xbee timeout timer
       xBeeTimeoutFlag = false;
      
       #ifdef PRINT_DEBUG
