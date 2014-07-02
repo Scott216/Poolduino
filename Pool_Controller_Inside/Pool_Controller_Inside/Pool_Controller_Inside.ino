@@ -38,8 +38,15 @@ v1.51  06/23/14 -  If sensor isn't working, sent n/a to SD card instead of last 
 v1.52  06/25/14 - Added bitly url to tweet
 v1.53  06/26/14 - Fixed char overflow, removed pooltime from sendTweet() function.  When alarm is triggered, record will be saved to SD card
                   Changed Xbee timeout from 5 min to 30 sec
+v1.54  06/28/14 - Changed xbee timeout, was getting too many alerts.  Have one timeout for Twitter message, another a shorter timeout for xively and SD card
+                  temporarily logging low water level to SD card
+v1.55  06/30/14 - reading xbee RSSI signal strength and saving to SC card along with xbee retries.  Prevent Sensor erros on bootup              
+v1.56  07/02/14 - Added condition to check for Leonardo and to use Serial1 instead of Serial for Xbee so it would work with v0.5 of the xbee library
+                  This sketch uses Mega, so it's not really necessary, but I wanted to be consistent with the other sketch
 
-To Do: twitter alarm if can't connect to xively
+To Do: 
+twitter alarm if can't connect to xively
+
  
 */
 
@@ -57,26 +64,6 @@ To Do: twitter alarm if can't connect to xively
 #include <Tokens.h>          // Tokens for Xively and twitter
 #include "Pool_Controller_Inside_Library.h"    // Include application, user and local libraries
 
-/*
-// Array positions for pool data array PoolData[]
-#define P_TEMP1               0   // Temperature before heater
-#define P_TEMP2               1   // Temperature after
-#define P_TEMP_PUMP           2   // Pump housing temperature
-#define P_PUMP_AMPS           3   // Amps pump is using
-#define P_PRESSURE1           4   // Pressure before filter
-#define P_PRESSURE2           5   // Pressure after filter
-#define P_PRESSURE3           6   // Pressure of water fill line
-#define P_LOW_PRES_CNT        7   // Counts times pressure was low
-#define P_CONTROLLER_STATUS   8   // Controller status 0-8
-#define P_WATER_FILL_MINUTES  9   // Minutes water fill valve was open today
-#define P_WATER_FILL_COUNTDN 10   // Countdown timer for water fill valve
-#define P_POOL_TIME          11   // Pool time from RTC, 2:45 PM = 14.75
-#define P_WATER_LVL_BATT     12   // Water level battery voltage
-#define P_LOW_WATER          13   // Low water sensor: 0 = level ok, 1 = low water, 2 = offline
-#define P_SENSORSTATUSBYTE   14   // Sensor Inputs Status Byte: 1 if sensor is working properly, 0 of not
-#define P_IOSTATUSBYTE       15   // Discrete I/O status byte: shows on/off state if I/O
-#define NUM_POOL_DATA_PTS    16   // Number of data points in pool array xbee packet
-*/
 
 // Index positions for PoolData[] array
 enum PoolDataIndex {
@@ -106,16 +93,16 @@ byte ioStatusbyte;              // Each bit shows input value of digital I/O
 // Xively Stream IDs
 #define NUM_XIVELY_STREAMS  16
 
-const byte STRLEN_MAX_TWEET =                   75;   // Character array size for twitter message
+const byte STRLEN_MAX_TWEET =               75;   // Character array size for twitter message
 const uint32_t XIVELY_UPDATE_INTERVAL =  15000;   // Xively upload interval (mS)
 const uint32_t XIVELY_UPDATE_TIMEOUT = 1800000;   // 30 minute timeout - if there are no successful updates in 30 minutes, reboot
-#define FEED_ID                  65673   // Xively Feed ID http://xively.com/feeds/65673/workbench
+#define FEED_ID   65673                           // Xively Feed ID http://xively.com/feeds/65673
 // #define FEED_ID 4663  // Test feed
 uint32_t xively_uploadTimout_timer; // Timer to reboot if no successful uploads in 30 minutes
 uint32_t xively_Upload_Timer;       // Timer for uploading to Xively
 
 const int bufferSize = 30;
-char bufferValue[bufferSize]; // enough space to store the string we're going to send
+char bufferValue[bufferSize]; // enough space to store the string we're going to send to Xively
 
 const byte statusBufLen = 26;  // character buffer length for controller status text
 
@@ -139,6 +126,8 @@ XivelyDatastream datastreams[] =
   XivelyDatastream("13", 2, DATASTREAM_INT),    // Status of controller - number
   XivelyDatastream("14", 2, DATASTREAM_INT),    // Water level sensor
   XivelyDatastream("15", 2, DATASTREAM_FLOAT)   // battery volts for water level sensor
+//  XivelyDatastream("16", 2, DATASTREAM_INT)     // Xbee RSSI signal strengh
+//  XivelyDatastream("17", 2, DATASTREAM_INT)     // XBee retries
 };
 
 // Wrap the datastreams into a feed
@@ -166,12 +155,12 @@ XBee xbee = XBee();
 XBeeResponse response = XBeeResponse();
 // create reusable response objects for responses we expect to handle
 Rx16Response rx16 = Rx16Response();
-uint8_t xbeeErrors;      // XBee Rx errors
-bool gotNewData;         // Flag to indicate that sketch has received new data from xbee
-uint32_t xbeeTimeout;    // Counts time between successful Xbee data, if it goes too long, it means we've lost our connection to Xbee
-bool xBeeTimeoutFlag;    // Flag to indicate no data from Xbee, used to keep warning from going off every 5 minutes
 
-const uint32_t XBEETIMEOUT = 30000; // 30 seconds
+bool gotNewData= false;        // Flag to indicate that sketch has received new data from xbee
+uint32_t xbeeLastRxTime;       // Last time data was received from xbee
+bool xBeeTimeoutFlag = false;  // Flag to indicate no data from Xbee, used to keep warning from going off every 5 minutes
+int8_t xbeeSignal;             // xbee RSSI Signal strength
+uint8_t xbeeRetries; 
 const int chipSelect = 4;  // Micro SD Card
 
 // Twitter setup
@@ -188,7 +177,7 @@ void software_Reset();
 bool SendDataToXively();
 bool ReadXBeeData(uint16_t *Tx_Id);
 bool logDataToSdCard(char msgComment[]);
-void sendAlarmMessage();
+void checkAlarms();
 int SendTweet(char msgTweet[]);
 int freeRam(bool PrintRam);
 void controllerStatus(char * txtStatus, int poolstatus);
@@ -208,25 +197,20 @@ bool isWaterLevelSensorOk();
 //============================================================================
 void setup(void)
 {
-  delay(1000);
-
   Serial.begin(9600);
-  xbee.begin(Serial);
+  delay(1000);
   
   #ifdef PRINT_DEBUG
-    Serial.println(F("\nSetup pool controller inside, v1.53"));
+    Serial.println(F("\nSetup pool controller inside, v1.56"));
   #endif
-  
 
-  //pinMode(53, OUTPUT);
- // digitalWrite(53, HIGH);
+  xbee.setSerial(Serial);  // if using Leonardo, use Serial1
 
   // Initialize Ethernet
   pinMode(4, OUTPUT);
   digitalWrite(4, HIGH);  // disable microSD card interface while ethernet is starting
   Ethernet.begin(mac);
   delay(1000);
-
 
   unsigned int localPort = 8888;    // local port to listen for UDP packets
   Serial.println(Ethernet.localIP());
@@ -245,7 +229,6 @@ void setup(void)
   char timebuf[16];
   sprintf(timebuf, "Time: %02d:%02d:%02d", hour(),minute(),second());
   Serial.println(timebuf);
-
   	
   // Initialize SD Card
   if ( SD.begin(chipSelect) )
@@ -253,16 +236,11 @@ void setup(void)
   else
   { Serial.println("Card failed, or not present"); }
 
-
-
   // Initialize global variables
   xively_uploadTimout_timer = millis() + XIVELY_UPDATE_TIMEOUT;
   xively_Upload_Timer       = millis() + XIVELY_UPDATE_INTERVAL;
-  
-  
-  xbeeTimeout       = millis() + XBEETIMEOUT;  // Initialize xbee timeout
-  xBeeTimeoutFlag   = false;
-  gotNewData        = false;  // Initialize, true when new we receive new data from xbee, is reset when it uploads to Xively
+    
+  xbeeLastRxTime = millis();  // initialize timer, didn't get xbee data yet, but don't want to generate an error on startup
   
   #ifdef PRINT_DEBUG
     Serial.println(F("End setup"));
@@ -276,9 +254,9 @@ void setup(void)
 //============================================================================
 void loop(void)
 {
-  uint16_t xbeeID;                // ID of transimitting xbee
-  char msgTweet[STRLEN_MAX_TWEET];    // Holds text for twitter message.  Should be big enough for message and timestamp
-  
+  uint16_t xbeeID;                      // ID of transimitting xbee
+  char msgTweet[STRLEN_MAX_TWEET];      // Holds text for twitter message.  Should be big enough for message and timestamp
+  static bool gotFistXbeeData = false;  // Needed at reboot to prevent false alarms for sensor status.  Set to true after first good xbee transmit 
   
   // Read XBee data
   // Keep tying to read data until successful.  After 30 tries, give up and move on
@@ -290,7 +268,12 @@ void loop(void)
     xbeeStat = ReadXBeeData(&xbeeID);
     xbeeFailCnt++;
   } while (xbeeStat == false && xbeeFailCnt < 30 );
+  xbeeRetries = xbeeFailCnt;
   
+  // One shot flag to indicate we got first data from xbee, only resets on reboot
+  if( xbeeStat) 
+  { gotFistXbeeData = true; }
+ 
   // Send a Tweet for startup, do this after you read xbee data so you can append pooltime which avoids duplicate tweets
   static bool tweetstartup;
   if (tweetstartup == false && millis() > 20000UL)
@@ -300,17 +283,15 @@ void loop(void)
     tweetstartup = true;
   }
   
-  // Check for Xbee Timeout: 5 minutes
-  if(((long)(millis() - xbeeTimeout) >= 0 ) && ( xBeeTimeoutFlag == false))
-  {
-    xBeeTimeoutFlag = true;
-    #ifdef PRINT_DEBUG
-      Serial.println(F("No Rx data from XBee"));
-    #else
-      strcpy(msgTweet, "Lost XBee communication.");
-      SendTweet(msgTweet);
-    #endif
-  }
+  // Check for Xbee timeout, 30 seconds
+  if( (long)(millis() - xbeeLastRxTime) >= 30000UL )
+  { xBeeTimeoutFlag = true; }
+
+    // SRG temp - log low level status and try to figure out why it's not getting recorded to xively
+    if ( xBeeTimeoutFlag == false && PoolData[P_LOW_WATER] == 1)
+    { logDataToSdCard("SRG Low water Level"); }
+
+
   
   // Upload data to Xively
   if ((long)(millis() - xively_Upload_Timer) >= 0)
@@ -318,16 +299,17 @@ void loop(void)
     xively_Upload_Timer = millis() + XIVELY_UPDATE_INTERVAL;  // Reset timer
     SendDataToXively(); // Send Data to Xively
     
-    // Log data to SD Card, if we are receiving data from outside controller
-    if ( xBeeTimeoutFlag == false)
+    // Log data to SD card, if we are receiving data from outside controller
+    if ( xBeeTimeoutFlag == false )
     { logDataToSdCard(""); }
   }
   
   // Check inputs and send message (Tweet) if anything is wrong
-  sendAlarmMessage();
+  // Only do this if we have establisehd communication with Xbee at least once
+  if ( gotFistXbeeData )
+  { checkAlarms(); }
   
-  
-  // Reboot if no successful updates in 30 minutes
+  // Reboot if no successful updates to Xively in 30 minutes
   if((long) (millis() - xively_uploadTimout_timer) >= 0)
   {
     strcpy(msgTweet, "Reboot: can't upload to Xively.");
@@ -341,7 +323,7 @@ void loop(void)
 
 
 // Check inputs and send out a tweet if anything is wrong
-void sendAlarmMessage()
+void checkAlarms()
 {
 
   // Twitter Flags (tf_) used so Twitter messages are only sent once
@@ -399,7 +381,6 @@ void sendAlarmMessage()
   // Reset high pump temp flag
   if(PoolData[P_TEMP_PUMP] < 110 && tf_highPumpTemp == true)
   { tf_highPumpTemp = false; }
-  
   
   // High pressure
   if(PoolData[P_PRESSURE1] >= 40.0 && tf_highPressure == false)
@@ -504,17 +485,17 @@ void sendAlarmMessage()
     SendTweet(msgAlarm);
   }
 
-  // Send alert if xbee communication is lost
-  if(xBeeTimeoutFlag && tf_Xbee_Comm == false)
+  // Send alert if xbee communication is lost for 10 mintues
+  if( (long)(millis() - xbeeLastRxTime) > 600000UL  && tf_Xbee_Comm == false )
   {
     tf_Xbee_Comm = true;
     strcpy(msgAlarm, "Lost xBee communication");
     logDataToSdCard(msgAlarm); 
     SendTweet(msgAlarm);
   }
-
-  // Reset xbee communication  flag
-  if(xBeeTimeoutFlag == false && tf_Xbee_Comm == true)
+  
+  // Reset xbee communication flag
+  if( gotNewData == true )
   { tf_Xbee_Comm = false; }
 
 
@@ -622,7 +603,7 @@ void sendAlarmMessage()
     SendTweet(msgAlarm);
   }
   
-  // Reset water Level Sensor flag
+  // Reset water Level sensor flag
   if ( isWaterLevelSensorOk() && tf_waterLevelSensor )
   { tf_waterLevelSensor = false; }
 
@@ -640,8 +621,7 @@ void sendAlarmMessage()
   if(PoolData[P_PUMP_AMPS] > 6 && ((sensorStatusbyte >> 6) & 1) == 1)
   { tf_pumpOffInDay = false; }
 
-  
-} // sendAlarmMessage
+} // end checkAlarms()
 
 
 //=========================================================================================================
@@ -705,8 +685,7 @@ int SendTweet(char * txtTweet)
     return 0;
   }
   
-
-} // SendTweet()
+} // end SendTweet()
 
 
 //=========================================================================================================
@@ -717,19 +696,7 @@ int SendTweet(char * txtTweet)
 bool SendDataToXively()
 {
 
-  /*
-   bool isPreFltrPressSensorOk();
-   bool isPostFltrPressSensorOk();
-   bool isWaterFillPressSensorOk();
-   bool isPreHtrTempSensorOk();
-   bool isPostHtrTempSensorOk();
-   bool isPumpTempSensorOk();
-   bool isPumpAmpsSensorOk();
-   bool isWaterLevelSensorOk();
-   */
-  
-
-  if ( gotNewData == true && xBeeTimeoutFlag == false )
+  if ( gotNewData == true )
   {
     // Only send data out if it's in a valid range and sensor is working
     if(PoolData[P_PRESSURE1] < 40.0 && isPreFltrPressSensorOk() )
@@ -770,17 +737,17 @@ bool SendDataToXively()
     
     if ( isWaterLevelSensorOk() )
     {
-      datastreams[14].setInt(PoolData[P_LOW_WATER] ); // 14 - water level sensor - Calculated
+      datastreams[14].setInt(PoolData[P_LOW_WATER] ); // 14 - water level sensor
       datastreams[15].setFloat(PoolData[P_WATER_LVL_BATT]/1000.0); // 15 - battery volts for water level sensor
     }
     
-  } // if gotNewData
-  
-  gotNewData = false; // reset got xbee data flag
+  } // end if(gotNewData)
   
   if( xBeeTimeoutFlag == true )
   { // No communication with XBEE
-    Serial.println(F("No Xbee Comm"));
+    #ifdef PRINT_DEBUG
+      Serial.println(F("No Xbee Comm"));
+    #endif
     datastreams[10].setBuffer("NO XBEE COMM");  // 10 - Controller status - sends text to Xively, not numbers
   }
   else
@@ -791,9 +758,7 @@ bool SendDataToXively()
   }
   
   datastreams[11].setInt(successes); // 11 - network successes
-  
   datastreams[12].setInt(failures);  // 12 - network failures
-  
   
   // Send data to Xively
   #ifdef PRINT_DEBUG
@@ -856,7 +821,7 @@ bool SendDataToXively()
       #endif
       return false;
   }
-}  // SendDataToXively()
+}  // end SendDataToXively()
 
 
 
@@ -864,6 +829,7 @@ bool SendDataToXively()
 //==================================================================================================================
 bool ReadXBeeData(uint16_t *Tx_Id)
 {
+  gotNewData = false; // reset flag
   
   // Read XBee data
   xbee.readPacket();
@@ -875,6 +841,9 @@ bool ReadXBeeData(uint16_t *Tx_Id)
     {
       // got a Rx packet
       xbee.getResponse().getRx16Response(rx16);  // I think this tells XBee to send the data over, not sure
+      xbeeSignal = (int) rx16.getRssi();
+      Serial.print("RSSI ");
+      Serial.println(xbeeSignal);
       int dataLength = rx16.getDataLength();     // Get number of bytes of data sent from outside XBee
       uint16_t RxData[dataLength];               // Array to hold raw XBee data
       *Tx_Id = rx16.getRemoteAddress16();        // MY ID of Tx, remember MY is set as a hex number.  Useful if you have multiple transmitters
@@ -889,12 +858,12 @@ bool ReadXBeeData(uint16_t *Tx_Id)
       
       // Put status bytes into byte variables
       sensorStatusbyte = PoolData[P_SENSORSTATUSBYTE];    // Each bit determines if sensor is operating properly
-      ioStatusbyte = PoolData[P_IOSTATUSBYTE];            // I/O state of digital I/O
+      ioStatusbyte     = PoolData[P_IOSTATUSBYTE];        // I/O state of digital I/O
       
       gotNewData = true;
-      xbeeTimeout = millis() + XBEETIMEOUT; // Reset xbee timeout timer
-      xBeeTimeoutFlag = false;
-     
+      xbeeLastRxTime = millis();  // Got data from xbee, so reset with current time
+      xBeeTimeoutFlag = false;    // reset flag
+      
       #ifdef PRINT_DEBUG
         PrintPoolData();
       #endif
@@ -906,7 +875,6 @@ bool ReadXBeeData(uint16_t *Tx_Id)
       #ifdef PRINT_DEBUG
         Serial.println(F("Got XBee Response, but not RX_16_RESPONSE"));
       #endif
-      xbeeErrors++;
       return false;
     }
   }
@@ -957,7 +925,7 @@ bool logDataToSdCard(char * txtComment)
     newFile.print(F("\tPre-heat sensor\tpost-heat sensor\tpump temp sensor\tpre-filter sensor\tpost-filter sensor\tWater fill sensor\tamps sensor\tlevel sensor"));
     //  ioStatusbyte
     newFile.print(F("\tpump on/off relay\tauto switch\ton switch\tWater fill LED\tWater fill pb\tWater fill output\tHeater output\tLevel Sensor"));
-    newFile.print(F("\tUpload Success\tfailures\txbee timeout\tcomment"));
+    newFile.print(F("\tUpload Success\tfailures\txbee timeout\tRSSI\tXbee retries\tcomment"));
     newFile.println();
     newFile.close();
   }
@@ -1019,6 +987,10 @@ bool logDataToSdCard(char * txtComment)
     dataFile.print(failures);
     dataFile.print(F("\t"));
     dataFile.print(xBeeTimeoutFlag);
+    dataFile.print(F("\t"));
+    dataFile.print(xbeeSignal);
+    dataFile.print(F("\t"));
+    dataFile.print(xbeeRetries);
     dataFile.print(F("\t"));
     dataFile.print(txtComment);
     dataFile.println();
@@ -1219,7 +1191,6 @@ void sendNTPpacket(IPAddress &address)
   Udp.write(packetBuffer, NTP_PACKET_SIZE);
   Udp.endPacket();
 }  // sendNTPpacket()
-
 
 
 // SRG - Move these to the class library when you build that out

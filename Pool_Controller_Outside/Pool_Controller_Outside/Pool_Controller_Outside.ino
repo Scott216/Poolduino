@@ -1,12 +1,13 @@
 /* 
- Uses Arduino Leo with Xbee, RTC and panStamp
+ Uses Arduino Leonardo with Xbee, RTC and panStamp
 
  with pre-filter pressure sensor disconnected, ADC reads around 400, 
  with water fill sensor diconnected, it reads in the 200s
 
 Changelog
-v1.50 10/25/14 - Added delay in pump off to stop false positives for pump amp sensor status
-
+v1.50 07/01/14 - Added delay in pump off to stop false positives for pump amp sensor status. Changed xbee.begin(9600); and restored old xbee library.  Having problems with new library from Feb 2014
+v1.51 07/02/14 - Added condition to check for Leonardo and to use Serial1 instead of Serial for Xbee so it would work with v0.5 of the xbee library
+                 Changed logic to prevent false pump amps sensor alert
 */
 
 #include "Arduino.h"
@@ -57,41 +58,40 @@ v1.50 10/25/14 - Added delay in pump off to stop false positives for pump amp se
 
 #define PUMP_SWITCH_ON   LOW   // Pump switch is ON when input is LOW, otherwise it's high from the pull-up resistor
 
-const uint32_t SENSOR_READ_INTERVAL =    250;  // Read sensor every 250mS
-const uint32_t TX_INTERVAL =            2000;  // Send data to house every 2 seconds
-const uint32_t ACK_RESPONSE_WAIT_TIME =  250;  // Time (mS) program waits for an ACK response from other XBee. Normal response time is about 15mS
-const float PUMP_ON_TIME =               7.5;  // 7:30 AM, Time to turn pump on each day
-const float PUMP_OFF_TIME =             19.0;  // 7:00 PM, Time to turn pump off each day
-#define XBEE_MY_ADDR_RX                0x250   // The MY address of the Rx XBee (don't use const Byte)
-const uint32_t WATER_FILL_BP_MIN =    908000;  // 15 minutes added to water fill timer
-const byte WATER_FILL_PRESS_THRESH =      20;  // If water fill pressure is > then thershold, you can assume garden hose is connected to water fill
-const byte pressureTransducer =          100;  // Can use either 100 PSI sensor or 30 PSI sensor
-                                               // With 0-30PSI transducer, analog input = 1023 at with valve off, 290 with valve open, 190 with hose diconnected
-const byte MAX_WATER_FILL_MINUTES =      120;  // Maximum number of minutes water can be added each day.  Reset at 11 PM
+const uint32_t SENSOR_READ_INTERVAL =     250;  // Read sensor every 250mS
+const uint32_t TX_INTERVAL =             2000;  // Send data to house every 2 seconds
+const uint32_t ACK_RESPONSE_WAIT_TIME =   250;  // Time (mS) program waits for an ACK response from other XBee. Normal response time is about 15mS
+const float    PUMP_ON_TIME =             7.5;  // 7:30 AM, Time to turn pump on each day
+const float    PUMP_OFF_TIME =           19.0;  // 7:00 PM, Time to turn pump off each day
+#define        XBEE_MY_ADDR_RX          0x250   // The MY address of the Rx XBee (don't use const byte). Don't care what the MY address is of Tx as long as it's not the same as Rx
+const uint32_t WATER_FILL_BP_MIN =     908000;  // 15 minutes added to water fill timer
+const byte     WATER_FILL_PRESS_THRESH =   20;  // If water fill pressure is > then thershold, you can assume garden hose is connected to water fill
+const byte     PRESSURE_TRANSDUCER_TYPE = 100;  // Can use either 100 PSI sensor or 30 PSI sensor
+                                                // With 0-30PSI transducer, analog input = 1023 at with valve off, 290 with valve open, 190 with hose diconnected
+const byte MAX_WATER_FILL_MINUTES =       120;  // Maximum number of minutes water can be added each day.  Reset at 11 PM
 
 
 // Status code to send to inside Arduino
 // Indicated current state of poolc controller
 byte poolStatus;
-const byte  statusPumpOff =              0;
-const byte  statusPumpOn =               1;
-const byte  statusPumpSwitchOff =        2;
-const byte  statusAddingWater =          3;
-const byte  statusEmergencyLoPresFluct = 4;  // low pressure because of fluctuations
-const byte  statusEmergencyLoPresCont =  5;  // continious low pressure for 5 mintutes
-const byte  statusEmergencyHiAmps =      6;
-const byte  statusEmergencyHiPumpTemp =  7;
-const byte  statusShutdnFromWeb =        8;  // future use
+const byte  STATUS_PUMP_OFF =                   0;
+const byte  STATUS_PUMP_ON =                    1;
+const byte  STATUS_PUMP_SWITCH_OFF =            2;
+const byte  STATUS_ADDING_WATER =               3;
+const byte  STATUS_EMERGENCY_LOW_PRESS_FLUCT =  4;  // low pressure because of fluctuations
+const byte  STATUS_EMERGENCY_LOW_PRESS_COUNT =  5;  // continious low pressure for 5 mintutes
+const byte  STATUS_EMERGENCY_HI_AMPS =          6;
+const byte  STATUS_EMERGENCY_HI_PUMP_TEMP =     7;
 
 byte lowWaterLevel = 0;             // Water level ok = 0, water level low = 1, sensor offline = 2
-const byte levelIsLow = 1;          // Water level is low
-const byte levelSensorOffline = 2;  // Water level is offline
+const byte LOW_WATER = 1;           // Water level is low
+const byte LEVEL_SENSOR_OFFLINE = 2;  // Water level is offline
 uint16_t levelSensorMilliVolts = 0; // Battery voltage for level sensor
 
 // Initialize Real Time Clock
 RTC_DS1307 RTC;
 
-const byte addrSlaveI2C =    21;  // I2C Slave address of RX panStamp
+const byte ADDR_SLAVE_I2C =  21;  // I2C Slave address of RX panStamp
 const byte I2C_PACKET_SIZE = 16;  // I2C Packet size
 
 
@@ -195,11 +195,9 @@ void printDebugFunction();
 //============================================================================
 void setup ()
 {
-  
-#ifdef PRINT_DEBUG
   Serial.begin(9600);
-#endif
-  xbee.begin(Serial);
+  Serial1.begin(9600);
+  xbee.setSerial(Serial1);
   
   pinMode(PUMP_OUTPUT,       OUTPUT);
   pinMode(WATER_FILL_PB_LED, OUTPUT);
@@ -237,12 +235,12 @@ void setup ()
   WaterFillTimer = millis();
   waterFillOnTrigger = false;
   EmergencyShutdown = 0; // everything okay
-  poolStatus = statusPumpOff;
+  poolStatus = STATUS_PUMP_OFF;
   presFluctResetFlag = true; // set flag to true so no low pressue warning are given until pressure builds up
 //  startupLowPressFlag == false;  // Reset flag
   
 #ifdef PRINT_DEBUG
-  Serial.println(F("Finished setup() v 1.50"));
+  Serial.println(F("Finished setup() v 1.51"));
 #endif
   
   
@@ -281,7 +279,7 @@ void loop ()
   // If water fill valve is closed and there is water pressure and low level is detected, enable water fill valve by adding time the water fill timer
   if(pressure[WATER_FILL_PRESSURE] > WATER_FILL_PRESS_THRESH &&
      digitalRead(WATER_OUTPUT) == LOW &&
-     lowWaterLevel == levelIsLow &&
+     lowWaterLevel == LOW_WATER &&
      waterAddedToday <= MAX_WATER_FILL_MINUTES)
   { WaterFillTimer = millis() + WATER_FILL_BP_MIN; }
   
@@ -316,15 +314,15 @@ void loop ()
   if(((long)(millis() - WaterFillTimer) < 0) && (waterAddedToday < MAX_WATER_FILL_MINUTES))
   {
     digitalWrite(WATER_OUTPUT, HIGH);
-    if(poolStatus <= statusAddingWater)
+    if(poolStatus <= STATUS_ADDING_WATER)
     {
-      poolStatus = statusAddingWater;  // Set status to show water is filling
+      poolStatus = STATUS_ADDING_WATER;  // Set status to show water is filling
     }  
   }
   else
   { // Turn water fill off
     digitalWrite(WATER_OUTPUT, LOW);
-    if(poolStatus == statusAddingWater)
+    if(poolStatus == STATUS_ADDING_WATER)
     {
       poolStatus = 0;  // Reset poolStatus when valve is turned off
     }  
@@ -424,7 +422,7 @@ void loop ()
   if(PumpAmps > 20 && EmergencyShutdown == 0)
   {
     EmergencyShutdown = 3;
-    poolStatus = statusEmergencyHiAmps;
+    poolStatus = STATUS_EMERGENCY_HI_AMPS;
   }
   
   // Shutdown pump if motor temp is too high
@@ -432,7 +430,7 @@ void loop ()
   if(temperature[PUMP_TEMP] > 180 && EmergencyShutdown == 0)
   {
     EmergencyShutdown = 2;
-    poolStatus = statusEmergencyHiPumpTemp;
+    poolStatus = STATUS_EMERGENCY_HI_PUMP_TEMP;
   }
   
   // Shutdown pump if low pressure counter goes to high
@@ -442,14 +440,14 @@ void loop ()
   if(presFluctCounter > 25 && EmergencyShutdown == 0)
   {
     EmergencyShutdown = 1;
-    poolStatus = statusEmergencyLoPresFluct;
+    poolStatus = STATUS_EMERGENCY_LOW_PRESS_FLUCT;
   }
   
   // If pressure has been low for 5 minutes straight, shut down pump
   if(long(millis() - lowPressTimer) > 0 && isLowPressTimerRunning == true && EmergencyShutdown == 0)
   {
     EmergencyShutdown = 1;
-    poolStatus = statusEmergencyLoPresCont;
+    poolStatus = STATUS_EMERGENCY_LOW_PRESS_COUNT;
   }
   
   // Turn pump on if:
@@ -458,28 +456,24 @@ void loop ()
   if(((poolTime >= PUMP_ON_TIME) && (poolTime <= PUMP_OFF_TIME) && (digitalRead(PUMP_INPUT_AUTO) == PUMP_SWITCH_ON) && (EmergencyShutdown == 0)) || (digitalRead(PUMP_INPUT_MAN) == PUMP_SWITCH_ON))
   { // Turn Pump On
     digitalWrite(PUMP_OUTPUT, HIGH);
-    if(poolStatus <= statusPumpSwitchOff)
-     { poolStatus = statusPumpOn; }   // set pool status to Pump On, don't override higher status codes
+    if(poolStatus <= STATUS_PUMP_SWITCH_OFF)
+     { poolStatus = STATUS_PUMP_ON; }   // set pool status to Pump On, don't override higher status codes
   }
   else
   { // Turn Pump off
     digitalWrite(PUMP_OUTPUT, LOW);
-    if ( PumpAmps > 3 )
-    { delay(500); } // give pump some time to turn off so we don't get false alarms for sensor status
-    if(poolStatus <= statusPumpSwitchOff)
-     { poolStatus = statusPumpOff; }  // set pool status to Pump Off, don't override higher status codes
+    if(poolStatus <= STATUS_PUMP_SWITCH_OFF)
+     { poolStatus = STATUS_PUMP_OFF; }  // set pool status to Pump Off, don't override higher status codes
   }
   
-  // See if pump on/off switch is in off position, if so, set poolStatus,  reset EmergencyShutdown, and reset pressure fluctuations
+  // See if pump on/off switch is in off position, if so, set poolStatus, reset EmergencyShutdown, and reset pressure fluctuations
   if(digitalRead(PUMP_INPUT_AUTO) != PUMP_SWITCH_ON && digitalRead(PUMP_INPUT_MAN) != PUMP_SWITCH_ON)
   {
-    poolStatus = statusPumpSwitchOff;
+    poolStatus = STATUS_PUMP_SWITCH_OFF;
     EmergencyShutdown = 0;
     presFluctCounter = 0;  // Reset low pressure counter; counter won't count up when water fill valve is on
     presFluctResetFlag == false;  // set to false so counter has chance to start again. If pressure never gets above 15, it won't reset
-    
   }
-  
   
   // Read Sensors
   // values are smoothed with low pass filter
@@ -511,7 +505,7 @@ void loop ()
 
 
     // Water fill pressure could use two different sensors, 0-30 PSI or 0-100 PSI
-    if ( pressureTransducer == 30 )
+    if ( PRESSURE_TRANSDUCER_TYPE == 30 )
     { newPressure = 0.0359  * (float) analogRead(WATER_FILL_PRESSURE_PIN) - 6.2548; } // using 0-30 PSI sensor
     else
     { newPressure = 0.12225 * (float) analogRead(WATER_FILL_PRESSURE_PIN) - 25.061; } // using 0-100 PSI sensor
@@ -585,7 +579,8 @@ void loop ()
     { sensorStatusbyte |= 1 << 6; }     // pump amps okay
     
     // if pump is off but amps are high, there is a problem with sensor (or pump)
-    if (digitalRead(PUMP_OUTPUT) == LOW && PumpAmps > 3)
+    // To prevent false positive when pump shuts off at the end of the day, don't generate error if poolTime = PUMP_OFF_TIME
+    if (digitalRead(PUMP_OUTPUT) == LOW && PumpAmps > 3 && poolTime != PUMP_OFF_TIME)
     { sensorStatusbyte  &= ~(1 << 6); }  // Invalid pump amps
     else
     { sensorStatusbyte |= 1 << 6; } // pump amps okay
@@ -744,7 +739,7 @@ bool getI2CData()
   byte i=0;  // counts packets received from panStamp
   byte i2CData[I2C_PACKET_SIZE];  // don't use char data type
   
-  Wire.requestFrom(addrSlaveI2C, I2C_PACKET_SIZE);    // request data from I2C slave
+  Wire.requestFrom(ADDR_SLAVE_I2C, I2C_PACKET_SIZE);    // request data from I2C slave
   
   while(Wire.available())    // Wire.available() will return the number of bytes available to read
   {
@@ -762,7 +757,7 @@ bool getI2CData()
     { // water level detector TX is online - low water for 2 minutes
       
       lowWaterLevel = i2CData[2];   // Set global variable, water low for 2 minutes
-      if(lowWaterLevel == levelSensorOffline )
+      if(lowWaterLevel == LEVEL_SENSOR_OFFLINE )
       { sensorStatusbyte  &= ~(1 << 7); } // water level offline
       else
       { sensorStatusbyte |= 1 << 7; }  // set water level sensor bit  to indicate sensor is online
@@ -783,7 +778,7 @@ bool getI2CData()
     else
     { // water level detector TX is offline
       sensorStatusbyte  &= ~(1 << 7);  // clear water level sensor bit to indicate sensor is offline
-      lowWaterLevel = levelSensorOffline;  // 0 - level ok, 1 - level low, 2 - offline
+      lowWaterLevel = LEVEL_SENSOR_OFFLINE;  // 0 - level ok, 1 - level low, 2 - offline
       levelSensorMilliVolts = 0;
     }
     return true;

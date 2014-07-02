@@ -32,7 +32,7 @@ Want low power consumption, put PanStamp in sleep mode, wake up every 8 seconds 
 Hardware
 panStamp  http://www.panstamp.com/
 MMA8452Q Accelerometer https://www.sparkfun.com/products/10955
-pullup resistors for I2C
+Pullup resistors for I2C
 Float switch McMaster 50195K93
 
 MMA8452Q Accelerometer
@@ -46,7 +46,7 @@ To set low power mode (MODS=11) in CTRL_REG2 set bits 0 = 1, bit 1 = 1
 PanStamp packet structure
 byte 0: Rx ID - ID of Rx panStamp
 byte 1: Tx ID - ID of Tx panStamp
-byte 2: bytes panstamp is sent
+byte 2: bytes panstamp is sending
 byte 3: Low water detected, low for two minutes. True = Low Water, False = water okay
 byte 4: low water sensor in real time: True = Low water, False = water okay
 byte 5: Level Lid: false - lid is not level
@@ -57,7 +57,8 @@ byte 12,13: Battery volts
 byte 14: Temperature (future)
 byte 15: Humidity (future)
 byte 16: Water leaking inside sensor (future)
- 
+byte 17: checksum (future)
+
  */
 
 // #define PRINT_DEBUG // comment out to turn off printing
