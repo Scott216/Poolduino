@@ -6,6 +6,8 @@ Features to add:
 - Use 3 momentary pushbuttons of On-Off-Auto.  You can use one analog input for all 3 plus water fill.
 You can do all all this on A4, which is where water fill input goes now. If you want Auto and On button 
 to light up,  use pins D12 & D13, they are the current inputs to on-off-auto.  Make provision for heater on and pool light on pushbuttons.
+See: http://tronixstuff.com/2012/02/29/tutorial-analog-input-for-multiple-buttons-part-two/
+Or use an I2C I/O expander like this: 296-26293-5-ND
 - Turn heater on/off with arduino
 - turn pool light on/off with arduino
 - Bluefruit for programming wirelessly
@@ -14,12 +16,15 @@ to light up,  use pins D12 & D13, they are the current inputs to on-off-auto.  M
 PCB Ideas
 Build CT circuit onto PCB
 Terminal strips for all sensor connections
-Build RTC on PCB, digikey DS1307+-ND, Crystal digikey X1124-ND
-If you do your own RTC refer see pg 6 of this doc: http://www.emesystems.com/pdfs/parts/DS1307_xtal.pdf it explains PCB requirements for the crystal
+Build RTC on PCB
 Small LCD to display status
 1-5 volt pressure transducers should have a 25k pull-down resistor so you know when if cable has a problem
 protect arduino against short circuits of sensor wire
+Reverse voltage protection
 Level shifter for I2C for panStamp
+PUt xbee in adafruit xbee adapter (https://www.youtube.com/watch?v=8DMZSxS-xVc&t=16m), this way it will be horizantel and signal might be stronger
+
+
 
 Hardware:
 Leonardo
