@@ -1,37 +1,21 @@
-///
-/// @file		Pool_Water_Level_Tx.ino
-/// @brief		Main sketch
-/// Project 	Pool_Water_Level_Tx Library
-///
-/// @details	<#details#>
-/// @n @a		Developed with [embedXcode+](http://embedXcode.weebly.com)
-/// 
-/// @author		Scott Goldthwaite
-/// @author		Scott Goldthwaite
-///
-/// @date		1/24/14 3:23 PM
-/// @version	<#version#>
-/// 
-/// @copyright	(c) Scott Goldthwaite, 2014
-/// @copyright	GNU General Public License
-///
-/// @see		ReadMe.txt for references
-/// @n
-///
-
 /*
+Monitors pool level and wirelessly sends status to 
+
+
+
 To Do
-Add reset button
-Add temp sensor
 Accelerometer has 10k pullups on the I2C lines, you may not need the external ones you put on.
 On/Off switch
+Add checksum to wireless data
+
+Note: had a problem one time where water was low, but it wasn't setting the low level variable.  I'm sketch was reporting lid was not flat when it was for some reason.
 
 Pool water Level detector with PanStamp
 Want low power consumption, put PanStamp in sleep mode, wake up every 8 seconds to test for water level
 
 Hardware
 panStamp  http://www.panstamp.com/
-MMA8452Q Accelerometer https://www.sparkfun.com/products/10955
+MMA8452Q Accelerometer http://www.sparkfun.com/products/10955
 Pullup resistors for I2C
 Float switch McMaster 50195K93
 
@@ -79,9 +63,7 @@ byte psReceiverAddress =    5;  // Address of panStamp data is sent too
 CC1101 cc1101;   // http://code.google.com/p/panstamp/wiki/CC1101class
 
 
-uint32_t lowWaterTimer;    // Timer used make sure water is low for a period of time
 #define LOWWATERTIME 150   // millis doesn't increment when in sleep mode, so you can't use normal milliseconds.  8 seconds = 10mS on millis(), 2 minutes = 150 millis() mS
-bool waterIsLow = false;   // This is set if level is low for a few minutes
 #define WATERLEVELSENSOR 8 // sensor is connected to D8
 #define LOWATER LOW        // Sensor input state then water is low
 
@@ -126,8 +108,6 @@ void setup()
   
   isAccelOnline = initMMA8452(); // Intialize the MMA8452Q Accelerometer
   
-  lowWaterTimer = millis() + LOWWATERTIME;
-  
   #ifdef PRINT_DEBUG
     Serial.println(F("Accelerometer enabled"));
     delay(200); // need a delay after printing to prevent garbled data
@@ -137,19 +117,21 @@ void setup()
 
 void loop()
 {
-  static uint16_t batteryOld; // used previous battery reading if current one is invalid
-  
-  if( digitalRead(WATERLEVELSENSOR) == LOWATER && IsLidFlat() == true)
-  { // Low water detected
-    
+  static uint16_t batteryOld; // use previous battery reading if current one is invalid
+  static uint32_t lowWaterTimer = millis() + LOWWATERTIME;  // Timer used make sure water is low for a period of time
+
+  // Check for low water level
+  bool waterIsLow = false;   // This is set if level is low for a few minutes
+  if( digitalRead(WATERLEVELSENSOR) == LOWATER && IsLidFlat() )
+  {
     // See if water level has been low for 2 minutes or more
-    if((long) (millis() - lowWaterTimer) > 0)
+    if( (long)(millis() - lowWaterTimer) > 0 )
     { waterIsLow = true; }
     else
     { waterIsLow = false; }
   }
   else
-  { // Water level is okay, reset low water timer
+  { // Water level is okay or lid is not flat, reset low water timer
     lowWaterTimer = millis() + LOWWATERTIME;
     waterIsLow = false;
   }
