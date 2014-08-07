@@ -46,7 +46,7 @@ I2C Packet structure
 byte 0: I2C Slave address
 byte 1: TX panStamp Status: 255 = offline, 0 = online
 byte 2: water level sensor 0 - level ok, 1 - level is low, 2 - sensor offline
-byte 3: Live low water sensor
+byte 3: Live low water sensor false = level ok, true = level is low
 byte 4: Is lid level true/false
 byte 5,6: Accelerometer x-axis value
 byte 7,9: Accelerometer y-axis value
