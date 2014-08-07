@@ -1,28 +1,29 @@
 /* 
- Uses Arduino Leonardo with Xbee, RTC and panStamp
+Main hardware: Arduino Leonardo, Xbee, RTC and panStamp
 
+GitHub Repo: http://git.io/xzlBSQ
+ 
 To do: 
 Calibrate pressure sensors
-Add checksum
+Add checksum to wireless data
 Force a delay between water fills
-Let water fill work at night
 
-Changelog
+ 
+Change log
 v1.50 07/01/14 - Added delay in pump off to stop false positives for pump amp sensor status. Changed xbee.begin(9600); and restored old xbee library.  Having problems with new library from Feb 2014
 v1.51 07/02/14 - Added condition to check for Leonardo and to use Serial1 instead of Serial for Xbee so it would work with v0.5 of the xbee library
                  Changed logic to prevent false pump amps sensor alert
 v1.52 07/02/14 - fixed bug with presFluctResetFlag, it wasn't getting reset.  Still getting false positive for amp sensor when motor is shut off, so I removed code that chekcs for amps with the motor off
 v1.53 07/07/14 - Removed commented code that checked for low pressure, but it's not needed since the low level sensor was installed
 v1.54 07/24/14 - Changed water fill max from 120 to 60, formatting, 
-
+v1.55 08/03/14 - changed how minutes per day of water fill is tracked. Will show each minute instead of 15-minute steps.  Added enum waterLevel_t
+ 
 */
-#define VER "v1.54"
+#define VER "v1.55"
 
 
 #include "Arduino.h"
 #include "Pool_Controller_Outside_Library.h"
-
-
 #include <Wire.h>       // http://www.arduino.cc/en/Reference/Wire
 #include <RTClib.h>     // http://github.com/adafruit/RTClib
 #include <XBee.h>       // http://code.google.com/p/xbee-arduino/     Modified per http://arduino.cc/forum/index.php/topic,111354.0.html
@@ -34,7 +35,7 @@ v1.54 07/24/14 - Changed water fill max from 120 to 60, formatting,
 #undef PROGMEM
 #define PROGMEM __attribute__(( section(".progmem.data") ))
 
-#define PRINT_DEBUG                   // Comment out when done debugging
+#define PRINT_DEBUG   // Comment out when done debugging
 
 
 // === Analog I/O Pins ===
@@ -97,9 +98,8 @@ const byte  STATUS_EMERGENCY_LOW_PRESS_COUNT =  5;  // continious low pressure f
 const byte  STATUS_EMERGENCY_HI_AMPS =          6;
 const byte  STATUS_EMERGENCY_HI_PUMP_TEMP =     7;
 
-byte lowWaterLevel = 0;             // Water level ok = 0, water level low = 1, sensor offline = 2
-const byte LOW_WATER = 1;           // Water level is low
-const byte LEVEL_SENSOR_OFFLINE = 2;  // Water level is offline
+enum waterLevel_t { WATER_LEVEL_OK, LOW_WATER, LEVEL_SENSOR_OFFLINE };
+waterLevel_t lowWaterLevel = WATER_LEVEL_OK;             // Water level ok = 0, water level low = 1, sensor offline = 2
 uint16_t levelSensorMilliVolts = 0; // Battery voltage for level sensor
 
 // Initialize Real Time Clock
@@ -186,16 +186,15 @@ bool    presFluctResetFlag;   // Reset when pressure goes back to normal.  Used 
 // Setup pushbutton for water fill.  Input goes low when pressed.
 Button btnWaterFill = Button(WATER_FILL_PB, LOW);
 
-bool waterFillOnTrigger;      // One shot trigger when water fill valve is turned on
-byte sensorStatusbyte;        // Each bit determines if sensor is operating properly
-byte ioStatusByte;            // I/O state of digital I/O
+byte sensorStatusbyte;           // Each bit determines if sensor is operating properly
+byte ioStatusByte;               // I/O state of digital I/O
 int16_t xbeeData[NUM_DATA_PTS];  // Array to hold integers that will be sent to other xbee
-float temperature[3];         // Pre-heater temp (0), Post-Heter temp (1), pump temp (2)
-float pressure[3];            // Pre-filter pressure (0), Post-filter pressure (1), water fill pressure (2)
-float PumpAmps;              // Amps going to pump
-float poolTime;              // Time from Real Time Clock convted to decimal
-uint8_t waterAddedToday;      // minutes of water added today
-uint16_t presFluctCounter;    // Counts low pressure fluctuations 
+float temperature[3];            // Pre-heater temp (0), Post-Heter temp (1), pump temp (2)
+float pressure[3];               // Pre-filter pressure (0), Post-filter pressure (1), water fill pressure (2)
+float PumpAmps = 0;              // Amps going to pump
+float poolTime;                  // Time from Real Time Clock convted to decimal
+uint8_t waterAddedToday = 0;     // minutes of water added today
+uint16_t presFluctCounter = 0;   // Counts low pressure fluctuations
 
 
 // Function Prototype
@@ -203,6 +202,8 @@ bool getI2CData();
 void setIoStatusByte();
 bool sendXbeeData();
 void printDebugFunction();
+bool isNewMinute();
+bool isNewDay();
 
 
 //============================================================================
@@ -247,7 +248,6 @@ void setup()
   // RTC.adjust(DateTime(__DATE__, __TIME__));
   
   WaterFillTimer = millis();
-  waterFillOnTrigger = false;
   EmergencyShutdown = 0; // everything okay
   poolStatus = STATUS_PUMP_OFF;
   presFluctResetFlag = true; // set flag to true so no low pressue warning are given until pressure builds up
@@ -269,7 +269,6 @@ void loop()
   static uint32_t SensorTimer;         // Timer for reading sensor every second
   static uint32_t TX_Timer;            // Timer to send data to house
   static uint32_t ReadTime;            // Timer for reading the Real Time Clock
-  static uint32_t waterFillStart;      // Saves millis setting of when water fill timer starts
   static uint32_t debounceTimer;       // Used to prevent double entries of water fill pushbutton
   static uint32_t waterFillResetTime;  // Used to time how long the water fill pushbutton is held.  If over 2 seconds, then reset water fill
   static uint32_t lowPressTimer;       // Times how long the pressure is low, used to shutdown pump if there is a problem
@@ -291,14 +290,14 @@ void loop()
   bool isWaterFillPressureOkay = pressure[WATER_FILL_PRESSURE] > WATER_FILL_PRESS_THRESH;
   bool isWaterFillValveClosed = digitalRead(WATER_OUTPUT) == LOW;
   bool isWaterLevelLow = lowWaterLevel == LOW_WATER;
-  bool isDailyTimerOK = waterAddedToday <= MAX_WATER_FILL_MINUTES; 
-  if ( isWaterFillPressureOkay && isWaterFillValveClosed && isWaterLevelLow && isDailyTimerOK )
+  bool isOkToAddWater = waterAddedToday <= MAX_WATER_FILL_MINUTES;
+  if ( isWaterFillPressureOkay && isWaterFillValveClosed && isWaterLevelLow && isOkToAddWater )
   { WaterFillTimer = millis() + WATER_FILL_BP_MIN; } // this will turn on water fill
     
   // Check for water fill pushbutton
   // Quick push will turn on water fill valve.  Holding pushbutton in will cancel water fill operation
   btnWaterFill.listen();
-  if ( btnWaterFill.onPress() && waterAddedToday <= MAX_WATER_FILL_MINUTES && millis() > debounceTimer )
+  if ( btnWaterFill.onPress() && isOkToAddWater && millis() > debounceTimer )
   {
     waterFillResetTime = millis();  // Used to time how long button is pressed, if pressed for 2 second then reset of water fill timer
     
@@ -317,7 +316,7 @@ void loop()
   { WaterFillTimer = millis(); }
 
   // Turn on water fill valve
-  if( ((long)(millis() - WaterFillTimer) < 0) && (waterAddedToday < MAX_WATER_FILL_MINUTES) )
+  if( ((long)(millis() - WaterFillTimer) < 0) && isOkToAddWater )
   {
     digitalWrite(WATER_OUTPUT, HIGH);
     if( poolStatus <= STATUS_ADDING_WATER )
@@ -333,22 +332,10 @@ void loop()
   // Turn on pushbutton LED when water fill valve is running
   digitalWrite(WATER_FILL_PB_LED, digitalRead(WATER_OUTPUT));  
   
-  // Check to see if water fill valve has just opened
-  // Used to calculate time water fill valve was on - start time
-  if( digitalRead(WATER_OUTPUT) == HIGH && waterFillOnTrigger == false )
-  {
-    waterFillOnTrigger = true;
-    waterFillStart = millis();
-  }
   
-  // check to see if water fill valve has just closed
-  // Used to calculate time water fill valve was on - end time
-  if( digitalRead(WATER_OUTPUT) == LOW &&  waterFillOnTrigger == true )
-  {
-    // Valve just closed, reset waterFillOnTrigger
-    waterFillOnTrigger = false;
-    waterAddedToday += (int) ((millis() - waterFillStart) / 60000.0); // Calculate time (minutes) that valve was on and to daily timer
-  }
+  // Track number of minutes water fill valve is opened each day
+  if( isNewMinute() && digitalRead(WATER_OUTPUT) == HIGH )
+  { waterAddedToday++; }
   
   // If low pressure is detected, increase counter, only if water fill valve is closed
   if( pressure[PRE_FILTER_PRESSURE] < 13 &&
@@ -575,10 +562,10 @@ void loop()
     printDebugFunction(); // srg - use to debug sketch
   }
   
-  // Reset waterAddedToday and low pressure counter every night at 11PM
-  if (poolTime > 23.0)
+  // Reset minutes of water added today counter and low pressure counter at midnight
+  if ( isNewDay() )
   {
-    waterAddedToday = 0;
+    waterAddedToday =  0;
     presFluctCounter = 0;
   }
   
@@ -725,16 +712,17 @@ bool getI2CData()
     gotI2CPacket = false;  // Reset flag
     
     // if panStamp TX is online, extract data, if not return offline codes
-    if (i2CData[1] == 0 )
-    { // water level detector TX is online - low water for 2 minutes
+    if ( i2CData[1] == 0 )
+    { // water level detector Tx is online
       
-      lowWaterLevel = i2CData[2];   // Set global variable, water low for 2 minutes
-      if(lowWaterLevel == LEVEL_SENSOR_OFFLINE )
+      lowWaterLevel = (waterLevel_t) i2CData[2];   // Tx sets water as low level if it's continiously low for 2 minutes
+      if( lowWaterLevel == LEVEL_SENSOR_OFFLINE )
       { sensorStatusbyte  &= ~(1 << 7); } // water level offline
       else
-      { sensorStatusbyte |= 1 << 7; }  // set water level sensor bit  to indicate sensor is online
+      { sensorStatusbyte |= 1 << 7; }  // set water level sensor bit to indicate sensor is online
         
-      // set ioStatusbyte bit for water level sensor (real time value)
+      // set ioStatusbyte bit for water level sensor (real time value as opposed to low for 2 minutes above)
+      // true = low water, false = water ok
       if(i2CData[3] == true )
       { ioStatusByte |= 1 << 7; }    // water level is low, set bit
       else
@@ -745,13 +733,12 @@ bool getI2CData()
       // Battery voltage
       levelSensorMilliVolts = i2CData[11] << 8;
       levelSensorMilliVolts |= i2CData[12];
-      
     }
     else
     { // water level detector TX is offline
       sensorStatusbyte  &= ~(1 << 7);  // clear water level sensor bit to indicate sensor is offline
-      lowWaterLevel = LEVEL_SENSOR_OFFLINE;  // 0 - level ok, 1 - level low, 2 - offline
-      levelSensorMilliVolts = 0;
+      lowWaterLevel = LEVEL_SENSOR_OFFLINE;
+      levelSensorMilliVolts = 0;  // if sensor is offline, battery voltage can't be returned, so set it to zero
     }
     return true;
   }  // end if(gotI2CPacket)
@@ -761,6 +748,42 @@ bool getI2CData()
   } 
   
 } // getI2CData()
+
+
+// Return true if it's a new minutes
+bool isNewMinute()
+{
+  DateTime now = RTC.now();  // Gets the current time
+  static byte prevMinute = now.minute();
+  byte thisMinute = now.minute();
+  
+  if ( thisMinute == prevMinute )
+  { return false;}
+  else
+  {
+    prevMinute = thisMinute;
+    return true;
+  }
+  
+} // isNewMinute()
+
+// Return true if it's a new minutes
+bool isNewDay()
+{
+  DateTime now = RTC.now();  // Gets the current time
+  static byte prevDay = now.day();
+  byte thisDay = now.day();
+  
+  if ( thisDay == prevDay )
+  { return false;}
+  else
+  {
+    prevDay = thisDay;
+    return true;
+  }
+  
+} // isNewDay()
+
 
 
 void printDebugFunction()  
