@@ -8,7 +8,7 @@ Accelerometer has 10k pullups on the I2C lines, you may not need the external on
 On/Off switch
 Add checksum to wireless data
 
-Note: had a problem one time where water was low, but it wasn't setting the low level variable.  I'm sketch was reporting lid was not flat when it was for some reason.
+Note: had a problem one time where water was low, but it wasn't setting the low level variable.  Sketch was reporting lid was not flat when it was for some reason.
 
 Pool water Level detector with PanStamp
 Want low power consumption, put PanStamp in sleep mode, wake up every 8 seconds to test for water level
@@ -28,44 +28,49 @@ To set ODR to 100 Hz in CTRL_REG1  set bit 3 = 1, bit 4 = 1, bit 5 = 0.
 To set low power mode (MODS=11) in CTRL_REG2 set bits 0 = 1, bit 1 = 1
 
 PanStamp packet structure
-byte 0: Rx ID - ID of Rx panStamp
-byte 1: Tx ID - ID of Tx panStamp
-byte 2: bytes panstamp is sending
-byte 3: Low water detected, low for two minutes. True = Low Water, False = water okay
-byte 4: low water sensor in real time: True = Low water, False = water okay
-byte 5: Level Lid: false - lid is not level
-byte 6,7: Accelerometer x-axis value
-byte 8,9: Accelerometer y-axis value
+byte 0:     Rx ID - ID of Rx panStamp
+byte 1:     Tx ID - ID of Tx panStamp
+byte 2:     Bytes in panstamp packet
+byte 3:     Water Level 2 Min: 0 = level ok, 1 = level low
+byte 4:     Water Level LIVE:  0 = level ok, 1 = level low
+byte 5:     Is lid flat: true/false
+byte 6,7:   Accelerometer x-axis value
+byte 8,9:   Accelerometer y-axis value
 byte 10,11: Accelerometer z-axis value
 byte 12,13: Battery volts
-byte 14: Temperature (future)
-byte 15: Humidity (future)
-byte 16: Water leaking inside sensor (future)
-byte 17: checksum (future)
+byte 14:    Reserved for water leaking inside sensor
+byte 15:    Checksum
 
- */
+ 
+Change log
+v1.10 08/17/14  Formatting, changed some #define to const. Added checksum.  Added sendData() function.  Changed packet byte 4 - live level to match 2 minute level
+ 
+*/
 
 // #define PRINT_DEBUG // comment out to turn off printing
 
-#include "Arduino.h"
 #include "EEPROM.h"       // panStamp address is saved to EEPROM http://www.arduino.cc/en/Reference/EEPROM
 #include "cc1101.h"       // http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/cc1101.h
 #include "panstamp.h"     // http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/panstamp.h
 #include <Wire.h>         // Used for I2C
 
+// This gets rid of compiler warning:  Only initialized variables can be placed into program memory area
+#undef PROGMEM
+#define PROGMEM __attribute__(( section(".progmem.data") ))
 
 // The networkAdress of sender and receiver must be the same
 // in the cc1101 documentation this byte is called syncword
 // in the SWAP world of the panStamp it is called networkAddress
+// Can't use constants for these
 byte psNetworkAddress =    91;
 byte psSenderAddress =      1;  // Address of this panStamp
 byte psReceiverAddress =    5;  // Address of panStamp data is sent too
 CC1101 cc1101;   // http://code.google.com/p/panstamp/wiki/CC1101class
 
 
-#define LOWWATERTIME 150   // millis doesn't increment when in sleep mode, so you can't use normal milliseconds.  8 seconds = 10mS on millis(), 2 minutes = 150 millis() mS
-#define WATERLEVELSENSOR 8 // sensor is connected to D8
-#define LOWATER LOW        // Sensor input state then water is low
+const byte LOWWATERTIME =         150; // millis doesn't increment when in sleep mode, so you can't use normal milliseconds.  8 seconds = 10mS on millis(), 2 minutes = 150 millis() mS
+const byte WATERLEVELSENSOR_PIN =   8; // level sensor is connected to pin D8
+#define LOW_WATER LOW                  // Sensor input state is LOW when water level is low
 
 //Define the registers that we will be accessing on the MMA8452
 #define MMA8452_ADDRESS 0x1D  // (decimal 29) 0x1D if SA0 is high, 0x1C if low
@@ -78,12 +83,13 @@ CC1101 cc1101;   // http://code.google.com/p/panstamp/wiki/CC1101class
 
 
 bool isAccelOnline = false; // flag to indicate if accelerometer is online
-int accelCount[3];  // Stores the 12-bit signed value
+int accelCount[3];          // Stores the 12-bit signed value
 
 
 // Function Prototypes
+void sendData(bool waterIsLow);
 bool IsLidFlat();
-unsigned int readVcc();
+uint16_t  readVcc();
 void readAccelData(int *destination);
 bool initMMA8452();
 void MMA8452Standby();
@@ -99,7 +105,7 @@ void setup()
   Serial.begin(9600);
   delay(1000);
   
-  pinMode(WATERLEVELSENSOR, INPUT_PULLUP);  // water level sensor
+  pinMode(WATERLEVELSENSOR_PIN, INPUT_PULLUP);  // water level sensor
   
   // Initialize the CC1101 RF Chip
   cc1101.init();
@@ -113,16 +119,16 @@ void setup()
     delay(200); // need a delay after printing to prevent garbled data
   #endif // PRINT_DEBUG
   
-} // setup()
+} // end setup()
+
 
 void loop()
 {
-  static uint16_t batteryOld; // use previous battery reading if current one is invalid
   static uint32_t lowWaterTimer = millis() + LOWWATERTIME;  // Timer used make sure water is low for a period of time
 
   // Check for low water level
   bool waterIsLow = false;   // This is set if level is low for a few minutes
-  if( digitalRead(WATERLEVELSENSOR) == LOWATER && IsLidFlat() )
+  if( digitalRead(WATERLEVELSENSOR_PIN) == LOW_WATER && IsLidFlat() )
   {
     // See if water level has been low for 2 minutes or more
     if( (long)(millis() - lowWaterTimer) > 0 )
@@ -138,53 +144,61 @@ void loop()
   
   #ifdef PRINT_DEBUG
     Serial.println("Transmitting data");
-    delay(200); // need a delay after printing to prevent garbled data
+    delay(200); // Need a delay after printing to prevent garbled data
   #endif
   
+  sendData(waterIsLow);
+  
+  panstamp.sleepWd(WDTO_8S);  // Sleep for 8 seconds. millis() doesn't increment while sleeping
+  
+}  // end loop()
+
+
+void sendData(bool waterIsLow)
+{
   CCPACKET data;
-  data.length = 17;                    // # bytes that make up packet to transmit
+  data.length = 16;                    // # bytes that make up packet to transmit
   data.data[0] = psReceiverAddress;    // Address of panStamp Receiver we are sending too. THIS IS REQUIRED BY THE CC1101 LIBRARY
   data.data[1] = psSenderAddress;      // Address of this panStamp Tx
   data.data[2] = data.length;          // bytes panstamp is sending
   data.data[3] = waterIsLow;           // Water level status true/false
-  if( digitalRead(WATERLEVELSENSOR) == LOWATER ) // Live level sensor input.  False = level okay, true = level is low
-  { data.data[4] = true; }
+  if( digitalRead(WATERLEVELSENSOR_PIN) == LOW_WATER ) // Live level sensor input
+  { data.data[4] = 1; }  // real time water level low
   else
-  { data.data[4] = false; }
-  data.data[5] = IsLidFlat();          // IsLidFlat
-  uint16_t accelRaw;
-
-  data.data[6] = accelCount[0] >> 8 & 0xff;  // x-axis value
+  { data.data[4] = 0; }  // real time water level okay
+  data.data[5] = IsLidFlat();
+  data.data[6] = accelCount[0] >> 8 & 0xff;  // x-axis accelerometer value
   data.data[7] = accelCount[0] & 0xff;
-  data.data[8] = accelCount[1] >> 8 & 0xff;  // y-axis value
+  data.data[8] = accelCount[1] >> 8 & 0xff;  // y-axis accelerometer value
   data.data[9] = accelCount[1] & 0xff;
-  data.data[10] = accelCount[2] >> 8 & 0xff; // z-axis value
+  data.data[10] = accelCount[2] >> 8 & 0xff; // z-axis accelerometer value
   data.data[11] = accelCount[2] & 0xff;
   
-  uint16_t battery = readVcc();        // Read battery voltage
+  static uint16_t batteryOld;    // Use previous battery reading if current one is invalid (less then 2 volts)
+  uint16_t battery = readVcc();
   if(battery < 2000)  // 2 volts
-  { battery = batteryOld; }  // use old value
+  { battery = batteryOld; }
   else
-  { batteryOld = battery; }  // update old value with current reading
+  { batteryOld = battery; }
   data.data[12] = battery >> 8 & 0xff;  // High byte - shift bits 8 places, 0xff masks off the upper 8 bits
   data.data[13] = battery & 0xff;       // Low byte, just mask off the upper 8 bits
-  // these are placeholders for future use
-  data.data[14] = 0;         // temperature;
-  data.data[15] = 0;         // humidity;
-  data.data[16] = false;     // waterLeak;
-  cc1101.sendData(data); // Send out data
+  data.data[14] = false;                // Reserved for water leaking inside electronics enclosure
   
-  panstamp.sleepWd(WDTO_8S);  // Sleep for 8 seconds. millis() doesn't increment while sleeping
+  // Calculate checksum
+  data.data[15] = 0;
+  for (byte cs = 0; cs < data.length-1; cs++)
+  { data.data[15] += data.data[cs]; }
   
-}  // loop()
+  cc1101.sendData(data); // Transmit data
+  
+} // end sendData()
 
 
 // Read the accelerometer and determine if the skimmer lid is flat or not
 // If not it means someone has removed the lid and the level detector should be ignored
 bool IsLidFlat()
 {
-  // read accelerometer
-  readAccelData(accelCount);  // Read the x/y/z adc values
+  readAccelData(accelCount);
   
   if (accelCount[0] > -100 && accelCount[0] < 100 &&
       accelCount[1] > -100 && accelCount[1] < 100 &&
@@ -192,11 +206,11 @@ bool IsLidFlat()
   { return true; }
   else
   { return false; }
-}  // IsLidFlat()
+}  // end IsLidFlat()
 
 
 // Read battery volts, returned value is in millivolts
-unsigned int readVcc()
+uint16_t readVcc()
 {
   // Read 1.1V reference against AVcc
   // set the reference to Vcc and the measurement to the internal 1.1V reference
@@ -222,7 +236,7 @@ unsigned int readVcc()
   result = 1125300L / result; // Calculate Vcc (in mV); 1125300 = 1.1*1023*1000
   return (unsigned int) result; // Vcc in millivolts
   
-} // readVcc()
+} // end readVcc()
 
 
 void readAccelData(int *destination)
@@ -246,7 +260,8 @@ void readAccelData(int *destination)
     
     destination[i] = gCount; // Record this gCount into the 3 int array
   }
-}  // readAccelData()
+}  // end readAccelData()
+
 
 // Initialize the MMA8452 registers
 // See the many application notes for more info on setting all of these registers:
@@ -277,7 +292,7 @@ bool initMMA8452()
     return false;
   }
   
-}  // initMMA8452()
+}  // end initMMA8452()
 
 
 // Sets the MMA8452 to standby mode. It must be in standby to change most register settings
@@ -285,7 +300,7 @@ void MMA8452Standby()
 {
   byte c = readRegister(CTRL_REG1);
   writeRegister(CTRL_REG1, c & ~(0x01)); //Clear the active bit to go into standby
-}  // MMA8452Standby()
+}  // end MMA8452Standby()
 
 
 // Sets the MMA8452 to active mode. Needs to be in this mode to output data
@@ -293,7 +308,8 @@ void MMA8452Active()
 {
   byte c = readRegister(CTRL_REG1);
   writeRegister(CTRL_REG1, c | 0x01); //Set the active bit to begin detection
-}  // MMA8452Active()
+}  // end MMA8452Active()
+
 
 // Put MMA8452 in low power mode (MODS = 11) and ODR = 100Hz.  Reduces power consumption to 24uA
 // Added by SRG
@@ -310,7 +326,7 @@ void MMA8452LowPower()
   c = readRegister(CTRL_REG2);
   writeRegister(CTRL_REG2, c | 0x03);  // set bit's 0 and 1
   
-}  // MMA8452LowPower()
+}  // end MMA8452LowPower()
 
 
 // Read bytesToRead sequentially, starting at addressToRead into the dest byte array
@@ -326,20 +342,22 @@ void readRegisters(byte addressToRead, int bytesToRead, byte * dest)
   
   for(int x = 0 ; x < bytesToRead ; x++)
     dest[x] = Wire.read();
-}  // readRegisters()
+}  // end readRegisters()
+
 
 // Read a single byte from addressToRead and return it as a byte
 byte readRegister(byte addressToRead)
 {
   Wire.beginTransmission(MMA8452_ADDRESS);
   Wire.write(addressToRead);
-  Wire.endTransmission(false); //endTransmission but keep the connection active
+  Wire.endTransmission(false); // endTransmission but keep the connection active
   
-  Wire.requestFrom(MMA8452_ADDRESS, 1); //Ask for 1 byte, once done, bus is released by default
+  Wire.requestFrom(MMA8452_ADDRESS, 1); // Ask for 1 byte, once done, bus is released by default
   
-  while(!Wire.available()) ; //Wait for the data to come back
-  return Wire.read(); //Return this one byte
-}  // readRegister()
+  while(!Wire.available()) ; // Wait for the data to come back
+  return Wire.read(); // Return this one byte
+}  // end readRegister()
+
 
 // Writes a single byte (dataToWrite) into addressToWrite
 void writeRegister(byte addressToWrite, byte dataToWrite)
@@ -348,5 +366,5 @@ void writeRegister(byte addressToWrite, byte dataToWrite)
   Wire.write(addressToWrite);
   Wire.write(dataToWrite);
   Wire.endTransmission(); //Stop transmitting
-}  // writeRegister()
+}  // end writeRegister()
 

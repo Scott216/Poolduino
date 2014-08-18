@@ -1,71 +1,52 @@
-///
-/// @file		Pool_Water_Level_Rx.ino
-/// @brief		Main sketch
-/// Project 	Pool_Water_Level_Rx Library
-///
-/// @details	<#details#>
-/// @n @a		Developed with [embedXcode+](http://embedXcode.weebly.com)
-/// 
-/// @author		Scott Goldthwaite
-/// @author		Scott Goldthwaite
-///
-/// @date		1/24/14 3:17 PM
-/// @version	<#version#>
-/// 
-/// @copyright	(c) Scott Goldthwaite, 2014
-/// @copyright	GNU General Public License
-///
-/// @see		ReadMe.txt for references
-/// @n
-///
-
-
-/* 
-PanStamp Level detector Receiver
-Recieves data from sensorl. 
-Acts as I2C slave to send data to main Arduino
+/*
+Pool water level sensor - Rx
+Use PanStamp to recieves data from water level sensor
+Acts as I2C slave and sends data to main Arduino pool controller
 
  
 PanStamp packet structure
-byte 0: Rx ID - ID of Rx panStamp
-byte 1: Tx ID - ID of Tx panStamp
-byte 2: bytes panstamp is sent
-byte 3: Low water detected, low for two minutes. True = Low Water, False = water okay
-byte 4: low water sensor in real time: True = Low water, False = water okay
-byte 5: Level Lid: false - lid is not level
-byte 6,7: Accelerometer x-axis value
-byte 8,9: Accelerometer y-axis value
+byte 0:     Rx ID - ID of Rx panStamp
+byte 1:     Tx ID - ID of Tx panStamp
+byte 2:     Bytes in panstamp packet
+byte 3:     Water Level 2 Min: 0 = level ok, 1 = level low
+byte 4:     Water Level LIVE:  0 = level ok, 1 = level low
+byte 5:     Is lid flat: true/false
+byte 6,7:   Accelerometer x-axis value
+byte 8,9:   Accelerometer y-axis value
 byte 10,11: Accelerometer z-axis value
 byte 12,13: Battery volts
-byte 14: Temperature (future)
-byte 15: Humidity (future)
-byte 16: Water leaking inside sensor (future)
- 
+byte 14:    Reserved for water leaking inside sensor
+byte 15:    Checksum
 
 I2C Packet structure
-byte 0: I2C Slave address
-byte 1: TX panStamp Status: 255 = offline, 0 = online
-byte 2: water level sensor 0 - level ok, 1 - level is low, 2 - sensor offline
-byte 3: Live low water sensor false = level ok, true = level is low
-byte 4: Is lid level true/false
-byte 5,6: Accelerometer x-axis value
-byte 7,9: Accelerometer y-axis value
-byte 9,10: Accelerometer z-axis value
-byte 11,12: battery voltage
-byte 13: Temperature (future)
-byte 14: Humidity (future)
-byte 15: Water leaking inside sensor (future)
+byte 0:     I2C Slave address (this panStamp is the slave)
+byte 1:     TX panStamp Status: 255 = offline, 0 = online
+byte 2:     Water Level 2 Min: 0 = level ok, 1 = level low, 2 = sensor offline
+byte 3:     Water Level LIVE:  0 = level ok, 1 = level low
+byte 4:     Is lid flat: true/false
+byte 5,6:   Accelerometer x-axis value
+byte 7,9:   Accelerometer y-axis value
+byte 9,10:  Accelerometer z-axis value
+byte 11,12: Battery voltage
+byte 13:    Reserved for water leaking inside sensor
+byte 14:    Checksum
+ 
+ 
+Change log
+v1.10 08/17/14  Added checksum. Formatting. Change real time level so 0 = level okay
+
 */
 
+// #define PRINT_DEBUG // comment out to turn off serial printing
 
-#include "Arduino.h"
 #include "EEPROM.h"       // panStamp address is saved to EEPROM http://www.arduino.cc/en/Reference/EEPROM
 #include "cc1101.h"       // http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/cc1101.h
 #include "panstamp.h"     // http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/panstamp.h
 #include <Wire.h>         // Used for I2C
 
-
-// #define PRINT_DEBUG // comment out to turn off serial printing
+// This gets rid of compiler warning:  Only initialized variables can be placed into program memory area
+#undef PROGMEM
+#define PROGMEM __attribute__(( section(".progmem.data") ))
 
 // The networkAdress of panStamp sender and receiver must be the same
 byte psNetworkAdress =         91;  // Network address for all pool panStamps 
@@ -185,9 +166,10 @@ void loop()
       #endif
        
         // Copy data from panStamp packet to I2C packet array
+        I2C_Packet[0] = addrSlaveI2C;
         I2C_Packet[1] = panStampOK;
-        I2C_Packet[2] = packet.data[3];    // Low water level, low for 2 mintues. true - low water, false - water ok
-        I2C_Packet[3] = packet.data[4];    // Low water level, real time. true - low water, false - water ok
+        I2C_Packet[2] = packet.data[3];    // Low water level, Water level sensor 0 = level ok, 1 = level is low, 2 = sensor offline
+        I2C_Packet[3] = packet.data[4];    // Real time Low water level: true = low water, false = water ok
         I2C_Packet[4] = packet.data[5];    // Is Lid Flat: true/false
         I2C_Packet[5] = packet.data[6];    // Accelerometer x-axis
         I2C_Packet[6] = packet.data[7];    // Accelerometer x-axis
@@ -197,10 +179,12 @@ void loop()
         I2C_Packet[10] = packet.data[11];  // Accelerometer x-axis
         I2C_Packet[11] = packet.data[12];  // Battery voltage
         I2C_Packet[12] = packet.data[13];  // Battery voltage
-        I2C_Packet[13] = packet.data[14];  // Temperature (future)
-        I2C_Packet[14] = packet.data[15];  // Humidity (future)
-        I2C_Packet[15] = packet.data[16];  // Leak detected in sensor (future)
-                                     
+        I2C_Packet[13] = packet.data[14];  // Reserved for leak detected in electronics
+        // checksum
+        I2C_Packet[14] = 0;
+        for (byte cs = 0; cs < 14; cs++)
+        { I2C_Packet[14] += I2C_Packet[cs]; }
+                                 
       } // packet is okay
     }  // got packet
     
@@ -212,12 +196,14 @@ void loop()
   if ((long)(millis() - psTxTimer) > 0 )    
   { 
     // panStamp is offline, set I2C packet appropriately
-    I2C_Packet[1] = panStampOffline; 
+    memset(I2C_Packet,0,sizeof(I2C_Packet));  // clear array
+    I2C_Packet[0] = addrSlaveI2C;
+    I2C_Packet[1] = panStampOffline;
     I2C_Packet[2] = 2; // 2 = offline
-    I2C_Packet[3] = 0; 
-    I2C_Packet[4] = 0; 
-    I2C_Packet[5] = 0; 
-    I2C_Packet[6] = 0; 
+    // checksum
+    for (byte cs = 0; cs < 3; cs++)
+    { I2C_Packet[14] += I2C_Packet[cs]; }
+                                 
   }  // end psPacketAvailable
   
   
@@ -231,7 +217,6 @@ void loop()
 void wireRequestEvent()
 {
   // Send data to I2C master
-  I2C_Packet[0] = addrSlaveI2C;
-  Wire.write(I2C_Packet, I2C_PACKET_LEN); 
+  Wire.write(I2C_Packet, I2C_PACKET_LEN);
   
 } // end wireRequestEvent()
