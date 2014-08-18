@@ -22,7 +22,7 @@ Small LCD to display status
 protect arduino against short circuits of sensor wire
 Reverse voltage protection
 Level shifter for I2C for panStamp
-PUt xbee in adafruit xbee adapter (https://www.youtube.com/watch?v=8DMZSxS-xVc&t=16m), this way it will be horizantel and signal might be stronger
+Pu  `t xbee in adafruit xbee adapter (https://www.youtube.com/watch?v=8DMZSxS-xVc&t=16m), this way it will be horizantel and signal might be stronger
 
 
 
@@ -190,18 +190,68 @@ This arduino uses I2C to communicate with panStamp RX which receives low water s
 I2C is also used to communicate with Real Time Clock
 Since we need Wire.h library for the real time clock, it will be used to communicate with panStamp, normally I would prefer I2C.h library
 
+
+
 I2C Packet structure
-byte 0: I2C Slave address
-byte 1: TX panStamp Status: 255 = offline, 0 = online
-byte 2: water level sensor 0 - level ok, 1 - level is low, 2 - sensor offline
-byte 3: Live low water sensor
-byte 4: Is lid level true/false
-byte 5,6: Accelerometer x-axis value
-byte 7,9: Accelerometer y-axis value
-byte 9,10: Accelerometer z-axis value
-byte 11,12: battery voltage
-byte 13: Temperature (future)
-byte 14: Humidity (future)
-byte 15: Water leaking inside sensor (future)
+-------------------------------------
+byte 0:     I2C Slave address (this panStamp is the slave)
+byte 1:     TX panStamp Status: 255 = offline, 0 = online
+byte 2:     Water Level 2 Min: 0 = level ok, 1 = level low, 2 = sensor offline
+byte 3:     Water Level LIVE:  0 = level ok, 1 = level low
+byte 4:     Is lid level: true/false
+byte 5,6:   Accelerometer x-axis value
+byte 7,9:   Accelerometer y-axis value
+byte 9,10:  Accelerometer z-axis value
+byte 11,12: Battery voltage
+byte 13:    Reserved for water leaking inside sensor
+byte 14:    Checksum
+
+
+XBee packet structure (all integers)
+-------------------------------------
+0  Temp Pre Heater
+1  Temp Post Heater
+2  Temp Pump houseing
+3  Pump Amps
+4  Pressure pre-filter
+5  Pressure post filter
+6  Pressure Water Fill
+7  Low pressure counter
+8  Controller Status Number
+9  Minutes of water added today
+10 Is lid flat
+11 Pool time
+12 Water level sensor battery voltage
+13 Low Water Level - calculated
+14 Sensor Input Status Byte - sensorStatusbyte
+15 Dicrete I/O status byte - ioStatusByte
+
+
+Sensors status byte - sensorStatusbyte
+1 = sensor is working properly, 0 = not working
+-----------------------------------------------
+0 Pre-heat temperature
+1 Post-heat temperature
+2 Pump temperature
+3 Pre-filter pressure
+4 Post-filter pressure
+5 Water fill pressure
+6 pump amps
+7 Water level sensor
+
+
+Discrete I/O status byte - ioStatusByte
+shows on/off state of I/O
+---------------------------
+0 Pump on/off relay
+1 Auto-Off-On switch is in Auto Position
+2 Auto-Off-On switch is in On Position
+3 Water fill LED
+4 Water fill pushbutton input
+5 Water fill valve relay
+6 Heater on/off relay output
+7 Real time Water Level Sensor 0 = water okay, 1 = water low
+ 
+
 
 
