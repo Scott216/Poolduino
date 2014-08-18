@@ -9,9 +9,7 @@ To do:
 Add OLED display
 See if you can update water added today every minute, not just when it's complete it's cycle
 Don't seem to need xbeeID Tx_Id parameter in XBee function
-Add a CRC or checksum to XBee data packet
-  http://forum.arduino.cc/index.php?topic=45742.0
-  
+
 
 Figure out how to send commands to outside XBee from inside XBee, then see if you can shut pump off from iPhone.  Make sure there is confirmation between XBees.
   Turn pump off from iphone/website http://www.yaler.org/
@@ -84,7 +82,7 @@ XBee packet structure
 7 Low pressure counter
 8 Controller Status Number
 9 Minutes of water added today
-10 Water fill countdown
+10 Is Lid Level
 11 Pool time
 12 Water level sensor battery voltage
 13 Low Water Level - calculated
@@ -103,8 +101,7 @@ sensorStatusbyte
 6 pump amps
 7 Water level sensor
 
-Discrete I/O status byte: shows on/off state if I/O
-ioStatusbyte
+Discrete I/O status byte: shows on/off state of I/O ioStatusbyte
 0 Pump on/off relay
 1 Auto-Off-On switch is in Auto Position
 2 Auto-Off-On switch is in On Position
@@ -112,5 +109,5 @@ ioStatusbyte
 4 Water fill pushbutton input
 5 Water fill valve relay
 6 Heater on/off relay output
-7 Water Level Sensor (real time)
+7 Water Level Sensor: 0=level ok, 1=level low
 
