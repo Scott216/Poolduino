@@ -195,7 +195,7 @@ Since we need Wire.h library for the real time clock, it will be used to communi
 I2C Packet structure
 -------------------------------------
 byte 0:     I2C Slave address (this panStamp is the slave)
-byte 1:     TX panStamp Status: 255 = offline, 0 = online
+byte 1:     TX panStamp Status: 255 = offline, 1 = online
 byte 2:     Water Level 2 Min: 0 = level ok, 1 = level low, 2 = sensor offline
 byte 3:     Water Level LIVE:  0 = level ok, 1 = level low
 byte 4:     Is lid level: true/false

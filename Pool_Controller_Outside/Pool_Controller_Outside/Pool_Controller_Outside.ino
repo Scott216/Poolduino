@@ -16,10 +16,11 @@ v1.53 07/07/14 - Removed commented code that checked for low pressure, but it's 
 v1.54 07/24/14 - Changed water fill max from 120 to 60, formatting, 
 v1.55 08/03/14 - changed how minutes per day of water fill is tracked. Will show each minute instead of 15-minute steps.  Added enum waterLevel_t
 v1.56 08/17/14 - Added checksum to I2C. Changed live level sensor so level ok = 0. Replaced water countdown with flat lid in Xbee packet byte 10
- 
+v1.57 08/18/14 - changed PANSTAMP_ONLINE from 0 to 1.  Getting a lot of checksum errors.  When there's an error every element but checksum is 0, so I didn't want 0 to be a valid value for PANSTAMP_ONLINE
+                 This also seemed to fix problem where the sensorstatus byte was sometimes reporting level sensor as being okay, when I had it disconnected
 */
 
-#define VER "v1.56"
+#define VER "v1.57"
 
 #define PRINT_DEBUG   // Comment out if not debugging
 
@@ -80,7 +81,7 @@ const byte     WATER_FILL_PRESS_THRESH =   20;  // If water fill pressure is > t
 const byte     PRESSURE_TRANSDUCER_TYPE = 100;  // Can use either 100 PSI sensor or 30 PSI sensor
                                                 // With 0-30PSI transducer, analog input = 1023 at with valve off, 290 with valve open, 190 with hose diconnected
 const byte MAX_WATER_FILL_MINUTES =       60;   // Maximum number of minutes water can be added each day.  Reset at 11 PM. Refactored some of the comples if() statements
-const byte PANSTAMP_ONLINE =               0;   // panStamp status, 0 = online, 255 = offline
+const byte PANSTAMP_ONLINE =               1;   // panStamp status, 0 = online, 255 = offline
 
 
 // Status code to send to inside Arduino
@@ -439,7 +440,6 @@ void loop()
     // Request I2C data from panStamp, will return water level sensor info
     getI2CData();
 
-
     // -----------------------------------------------
     // Validate sensor data and set sensorStatusbyte
     // -----------------------------------------------
@@ -488,7 +488,6 @@ void loop()
     else
     { sensorStatusByte |= 1 << 5; }     // sensor ok (1)
     
-    // SRG - sometimes get false errors when pump is shut off 
     // Pump Amps
     // if pump is on but amps are low, there is a problem with sensor (or pump)
     if (digitalRead(PUMP_OUTPUT) == HIGH && PumpAmps < 4 )
@@ -663,7 +662,7 @@ bool getI2CData()
     if ( checksum != i2CData[I2C_PACKET_SIZE - 1] )
     {
       #ifdef PRINT_DEBUG
-        Serial.println(F("I2C Checksum Failed"));
+//        Serial.print(F("I2C Checksum Failed "));
       #endif
       return false;   // checksum failed, exit function
     }

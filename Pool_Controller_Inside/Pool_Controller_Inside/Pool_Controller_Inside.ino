@@ -762,7 +762,7 @@ void checkAlarms()
   
   // Reset water Level sensor flag
   if ( isWaterLevelSensorOk() )
-  { tf_waterLevelSensor = NO_ALARM; }
+  { tf_waterLevelSensor = NO_ALARM;}
 
   // At 11:01 PM reset flags for pump running at night, not running in day, and heater is on
   if(hour() == 23 && minute() == 1 && second() < 10 )

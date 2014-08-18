@@ -20,7 +20,7 @@ byte 15:    Checksum
 
 I2C Packet structure
 byte 0:     I2C Slave address (this panStamp is the slave)
-byte 1:     TX panStamp Status: 255 = offline, 0 = online
+byte 1:     TX panStamp Status: 255 = offline, 1 = online
 byte 2:     Water Level 2 Min: 0 = level ok, 1 = level low, 2 = sensor offline
 byte 3:     Water Level LIVE:  0 = level ok, 1 = level low
 byte 4:     Is lid flat: true/false
@@ -34,7 +34,7 @@ byte 14:    Checksum
  
 Change log
 v1.10 08/17/14  Added checksum. Formatting. Change real time level so 0 = level okay
-
+v1.11 08/18/14 - changed panStampOk from 0 to 1
 */
 
 // #define PRINT_DEBUG // comment out to turn off serial printing
@@ -54,7 +54,7 @@ byte psReceiverAddress =        5;  // Device address of this panStamp
 const byte addrSlaveI2C =      21;  // I2C Slave address of this device
 const byte addrLevelSensor =    1;  // panStamp device address for low water sensor
 const byte panStampOffline =  255;  // Send this to I2C master in the panStamp Rx address to indicate panStamp is offline
-const byte panStampOK      =    0;  // panStamp is successfully transmitting data
+const byte panStampOK      =    1;  // panStamp is successfully transmitting data
 uint32_t psTxTimer = 0; 
 #define PSTIMEOUT 120000      // 2 minute timeout for panStamps.  If no connections in 2 minutes, tell master that panStamp is offline
 
@@ -159,7 +159,7 @@ void loop()
         else
         { Serial.println(F("Lid is not level")); }
         Serial.print(F("Battery LSB: "));
-        Serial.print(packet.data[11);
+        Serial.print(packet.data[11]);
         Serial.print(F("   Battery MSB: "));
         Serial.println(packet.data[12]);
         Serial.println();
