@@ -9,6 +9,7 @@ Xbee Series 1
 To Do:
 Delay after you receive an alarm and check again in a couple seconds
 Try uploading to Xively without Xively.h library to see if you can reduce the program size
+Tweet if heater is on and temp > 85
 
 SD Card info: 
 Format FAT 16
@@ -17,8 +18,8 @@ Data is not saved until you use flush() or close()
 Etherenet shield uses pin 4 for SD Card
 SD.begin(4); // initialize SD Card
 
-turn off ethernet when using SD Card:
-digitalWrite(53, HIGH); 
+On the Mega, the hardware SS pin, 53, is not used to select the W5100, but it must be kept as an output or the SPI interface won't work.
+
 
 
 Change Log
@@ -35,11 +36,11 @@ v1.56  07/02/14 - Added condition to check for Leonardo and to use Serial1 inste
                   Removed check for Leonardo condition above.
 v1.57  07/10/14 - Added PROGMEM statement to get rid of compiler warnigs
 v1.58  07/30/14 - added column in log file for low water level.  Modified twitter alarms so tweet would only go out if 2 alarms were received a couple seconds apart.  Should help with false positives
-
+v1.59  08/17/14 - Changed some heading in log file. Added new Xbee shield that uses Serial1 (pins D18-19 on Mega). Added Is lid level to xbee data
  
 */
-#define VERSION "v1.58"
-#define PRINT_DEBUG     // Comment out to turn off serial printing
+#define VERSION "v1.59"
+#define PRINT_DEBUG     // Comment out to turn off printing
 
 #include <SPI.h>             // Communicate with SPI devices http://arduino.cc/en/Reference/SPI
 #include <Ethernet.h>        // LIbrary for Arduino ethernet shield http://arduino.cc/en/Reference/Ethernet
@@ -47,15 +48,20 @@ v1.58  07/30/14 - added column in log file for low water level.  Modified twitte
 #include <Time.h>            // http://playground.arduino.cc/Code/time
 #include <SPI.h>             // http://arduino.cc/en/Reference/SPI
 #include <SD.h>              // Micro SD Card. http://arduino.cc/en/Reference/SD
-#include <Xively.h>          // http://github.com/xively/xively_arduino
-#include <Twitter.h>         // http://arduino.cc/playground/Code/TwitterLibrary, get token from token at http://arduino-tweet.appspot.com/
-#include <XBee.h>            // http://code.google.com/p/xbee-arduino/
-#include <Tokens.h>          // Tokens for Xively and twitter
+#include "Xively.h"          // http://github.com/xively/xively_arduino
+#include "Twitter.h"         // http://arduino.cc/playground/Code/TwitterLibrary, get token from token at http://arduino-tweet.appspot.com/
+#include "XBee.h"            // http://code.google.com/p/xbee-arduino/
+#include "Tokens.h"          // Tokens for Xively and twitter
 #include "Pool_Controller_Inside_Library.h"    // Include application, user and local libraries
 
 // This gets rid of compiler warning:  Only initialized variables can be placed into program memory area
 #undef PROGMEM
 #define PROGMEM __attribute__(( section(".progmem.data") ))
+
+// I/O
+const byte SD_CARD_SS =   4;
+const byte SPI_ENABLE  = 53;  // Must be defined as an output for SPI to work properly
+// D10 is reserved for Etherent SS
 
 
 // Index positions for PoolData[] array
@@ -70,7 +76,7 @@ enum PoolDataIndex {
  P_LOW_PRES_CNT,        // Counts times pressure was low
  P_CONTROLLER_STATUS,   // Controller status 0-8
  P_WATER_FILL_MINUTES,  // Minutes water fill valve was open today
- P_WATER_FILL_COUNTDN,  // Countdown timer for water fill valve
+ P_LID_IS_LEVEL,        // Is lid level on water level sensor
  P_POOL_TIME,           // Pool time from RTC, 2:45 PM = 14.75
  P_WATER_LVL_BATT,      // Water level battery voltage
  P_LOW_WATER,           // Low water sensor: 0 = level ok, 1 = low water, 2 = offline
@@ -79,8 +85,8 @@ enum PoolDataIndex {
  NUM_POOL_DATA_PTS      // Number of data points in pool array xbee packet
 };
 
-byte sensorStatusbyte;          // Each bit determines if sensor is operating properly
-byte ioStatusbyte;              // Each bit shows input value of digital I/O
+byte sensorStatusByte;          // Each bit determines if sensor is operating properly
+byte ioStatusByte;              // Each bit shows input value of digital I/O
 
 
 // Number of Xively Streams
@@ -177,7 +183,7 @@ void controllerStatus(char * txtStatus, int poolstatus);
 void sendNTPpacket(IPAddress &address);
 time_t getNtpTime();
 
-bool isPreFltrPressSensorOk();  // srg - remove after these are put in class
+bool isPreFltrPressSensorOk();
 bool isPostFltrPressSensorOk();
 bool isWaterFillPressSensorOk();
 bool isPreHtrTempSensorOk();
@@ -185,6 +191,8 @@ bool isPostHtrTempSensorOk();
 bool isPumpTempSensorOk();
 bool isPumpAmpsSensorOk();
 bool isWaterLevelSensorOk();
+
+bool isWaterFillValveOpen();
 
 //============================================================================
 //============================================================================
@@ -198,11 +206,14 @@ void setup(void)
     Serial.println(VERSION);
   #endif
 
-  xbee.setSerial(Serial);  // if using Leonardo, use Serial1
+  // Xbee is using Serial1 on Mega pins D18 (Tx) D19 (Rx)
+  Serial1.begin(9600);
+  xbee.setSerial(Serial1);
 
   // Initialize Ethernet
-  pinMode(4, OUTPUT);
-  digitalWrite(4, HIGH);  // disable microSD card interface while ethernet is starting
+  pinMode(SPI_ENABLE, OUTPUT);
+  pinMode(SD_CARD_SS, OUTPUT);
+  digitalWrite(SD_CARD_SS, HIGH);  // disable microSD card interface while ethernet is starting
   Ethernet.begin(mac);
   delay(1000);
 
@@ -220,16 +231,20 @@ void setup(void)
     getNtpTime();
   }
   //  setTime(hour(t),minute(t),second(t),month(t),day(t),year(t));
-  char timebuf[16];
-  sprintf(timebuf, "Time: %02d:%02d:%02d", hour(),minute(),second());
-  Serial.println(timebuf);
+  #ifdef PRINT_DEBUG
+    char timebuf[16];
+    sprintf(timebuf, "Time: %02d:%02d:%02d", hour(),minute(),second());
+    Serial.println(timebuf);
+  #endif
   	
   // Initialize SD Card
   if ( SD.begin(chipSelect) )
-  { Serial.println("card initialized."); }
-  else
-  { Serial.println("Card failed, or not present"); }
-
+  #ifdef PRINT_DEBUG
+    { Serial.println(F("card initialized")); }
+    else
+    { Serial.println(F("Card failed, or not present")); }
+  #endif
+  
   // Initialize global variables
   xively_uploadTimout_timer = millis() + XIVELY_UPDATE_TIMEOUT;
   xively_Upload_Timer       = millis() + XIVELY_UPDATE_INTERVAL;
@@ -278,10 +293,10 @@ void loop(void)
   }
   
   // Check for Xbee timeout, 30 seconds
-  if( (long)(millis() - xbeeLastRxTime) >= 30000UL )
+  if( (long)(millis() - xbeeLastRxTime) >= 30000L )
   { xBeeTimeoutFlag = true; }
 
-    // Log low level status
+    // Log water level sensor status
 //srg    if ( xBeeTimeoutFlag == false && PoolData[P_LOW_WATER] == 1)
 //    { logDataToSdCard(""); }
 
@@ -292,8 +307,9 @@ void loop(void)
     SendDataToXively(); // Send Data to Xively
     
     // Log data to SD card, if we are receiving data from outside controller
+    char emptyString[] = "";
     if ( xBeeTimeoutFlag == false )
-    { logDataToSdCard(""); }
+    { logDataToSdCard(emptyString); }
   }
   
   // Check inputs and send message (Tweet) if anything is wrong
@@ -486,20 +502,20 @@ void checkAlarms()
   { tf_emergencyShutdown = NO_ALARM; }
   
   // Send Tweet if water fill has started
-  if( PoolData[P_WATER_FILL_COUNTDN] > 1 && tf_waterFillOn != ALARM_2 )
+  if( isWaterFillValveOpen() && tf_waterFillOn != ALARM_2 )
   {
     // Wait a couple seconds in case water fill button is pressed a couple times, then read XBee data again
     delay(2500);
     uint16_t xbeeID;
     ReadXBeeData(&xbeeID);
-    sprintf(msgAlarm, "Water fill started for %d minutes.", (int) PoolData[P_WATER_FILL_COUNTDN]);
-    logDataToSdCard(msgAlarm); 
+    strcpy(msgAlarm, "Water fill started");
+    logDataToSdCard(msgAlarm);
     SendTweet(msgAlarm);
     tf_waterFillOn = ALARM_2;  // flag so Tweet is only sent once
   }
 
   // Reset water fill timer flag
-  if( PoolData[P_WATER_FILL_COUNTDN] == 0 )
+  if( isWaterFillValveOpen() == false )
   { tf_waterFillOn = NO_ALARM; }
 
   // Send Tweet if pump is running at night
@@ -555,7 +571,7 @@ void checkAlarms()
   }
 
   // Send alert if xbee communication is lost for 10 mintues
-  if( (long)(millis() - xbeeLastRxTime) > 600000UL  && tf_Xbee_Comm != ALARM_2 )
+  if( (long)(millis() - xbeeLastRxTime) > 600000L  && tf_Xbee_Comm != ALARM_2 )
   {
     if( tf_Xbee_Comm == NO_ALARM )
     {
@@ -759,7 +775,7 @@ void checkAlarms()
   }
 
   // tf_pumpOffInDay flag can also be reset if pump it turned back on
-  if(PoolData[P_PUMP_AMPS] > 6 && ((sensorStatusbyte >> 6) & 1) == 1)
+  if(PoolData[P_PUMP_AMPS] > 6 && ((sensorStatusByte >> 6) & 1) == 1)
   { tf_pumpOffInDay = NO_ALARM; }
 
 } // end checkAlarms()
@@ -876,11 +892,8 @@ bool SendDataToXively()
     
     datastreams[13].setInt((int) PoolData[P_CONTROLLER_STATUS]); // 13 - Controller status code number
     
-    if ( isWaterLevelSensorOk() )
-    {
-      datastreams[14].setInt(PoolData[P_LOW_WATER] ); // 14 - water level sensor
-      datastreams[15].setFloat(PoolData[P_WATER_LVL_BATT]/1000.0); // 15 - battery volts for water level sensor
-    }
+    datastreams[14].setInt(PoolData[P_LOW_WATER] ); // 14 - water level sensor
+    datastreams[15].setFloat(PoolData[P_WATER_LVL_BATT]/1000.0); // 15 - battery volts for water level sensor
     
   } // end if(gotNewData)
   
@@ -983,14 +996,16 @@ bool ReadXBeeData(uint16_t *Tx_Id)
       // got a Rx packet
       xbee.getResponse().getRx16Response(rx16);  // I think this tells XBee to send the data over, not sure
       xbeeSignal = (int) rx16.getRssi();
-      Serial.print("RSSI ");
-      Serial.println(xbeeSignal);
+//    #ifdef PRINT_DEBUG
+//      Serial.print("RSSI ");
+//      Serial.println(xbeeSignal);
+//    #endif
       int dataLength = rx16.getDataLength();     // Get number of bytes of data sent from outside XBee
       uint16_t RxData[dataLength];               // Array to hold raw XBee data
       *Tx_Id = rx16.getRemoteAddress16();        // MY ID of Tx, remember MY is set as a hex number.  Useful if you have multiple transmitters
       
-      // Convert data from bytes to integers, except last two bytes in array which are status bytes and don't get converted
-      for(int i=0; i < dataLength; i=i+2)
+      // Convert data from bytes to integers
+      for(int i=0; i < dataLength - 2; i=i+2)
       {
         RxData[i/2]  = rx16.getData(i) << 8;
         RxData[i/2] |= rx16.getData(i+1);
@@ -998,8 +1013,8 @@ bool ReadXBeeData(uint16_t *Tx_Id)
       }
       
       // Put status bytes into byte variables
-      sensorStatusbyte = PoolData[P_SENSORSTATUSBYTE];    // Each bit determines if sensor is operating properly
-      ioStatusbyte     = PoolData[P_IOSTATUSBYTE];        // I/O state of digital I/O
+      sensorStatusByte = PoolData[P_SENSORSTATUSBYTE];    // Each bit determines if sensor is operating properly
+      ioStatusByte     = PoolData[P_IOSTATUSBYTE];        // I/O state of digital I/O
       
       gotNewData = true;
       xbeeLastRxTime = millis();  // Got data from xbee, so reset with current time
@@ -1023,22 +1038,12 @@ bool ReadXBeeData(uint16_t *Tx_Id)
   else if (xbee.getResponse().isError())
   {
     // Got something, but not a packet
-    // You get error code 0 when the other Xbee isn't sending anydata over
-    #ifdef PRINT_DEBUG
-      //srg      Serial.print(F("XBee error reading packet. Err code: "));
-      //      Serial.println(xbee.getResponse().getErrorCode());
-    #endif
+    // Can use xbee.getResponse().getErrorCode() to get an error number
+    // You get error code 0 when the other Xbee isn't sending any data over
     return false;
   } // End Got Something
   else
-  {
-    // xbee not available and no error
-    #ifdef PRINT_DEBUG
-      //srg      Serial.print(F("XBee not avail, Err code: "));
-      //      Serial.println(xbee.getResponse().getErrorCode());
-    #endif
-    return false;
-  }
+  { return false; }  // xbee not available and no error
   
 } // ReadXbeeData()
 
@@ -1061,11 +1066,11 @@ bool logDataToSdCard(char * txtComment)
     File newFile = SD.open(logfile, FILE_WRITE);
     // Create header row
     newFile.print(F("Timestamp\tPool Time\tpre heat Temp\tpost heat temp\tpump temp\tamps\tpre fltr pressure\tpost fltr pressure\twtr fill pressure"));
-    newFile.print(F("\tlow pressure cnt\twater fill min\tbattery\tlow water\tstatus ID\tstatus txt"));
-     // sensorStatusbyte
-    newFile.print(F("\tPre-heat sensor\tpost-heat sensor\tpump temp sensor\tpre-filter sensor\tpost-filter sensor\tWater fill sensor\tamps sensor\tlevel sensor"));
+    newFile.print(F("\tlow pressure cnt\twater fill min\tbattery\tlid\tlevel sensor (2 min)\tstatus ID\tstatus txt"));
+     // sensorStatusbyte - sensor ok status
+    newFile.print(F("\tPre-heat sensor ok\tpost-heat sensor ok\tpump temp sensor ok\tpre-filter sensor ok\tpost-filter sensor ok\tWater fill sensor ok\tamps sensor ok\tlevel sensor ok"));
     //  ioStatusbyte
-    newFile.print(F("\tpump on/off relay\tauto switch\ton switch\tWater fill LED\tWater fill pb\tWater fill output\tHeater output\tLevel Sensor"));
+    newFile.print(F("\tpump on/off relay\tauto switch\ton switch\tWater fill LED\tWater fill pb\tWater fill output\tHeater output\tlevel sensor realtime"));
     newFile.print(F("\tUpload Success\tfailures\txbee timeout\tRSSI\tXbee retries\tcomment"));
     newFile.println();
     newFile.close();
@@ -1107,7 +1112,12 @@ bool logDataToSdCard(char * txtComment)
     dataFile.print(PoolData[P_WATER_LVL_BATT]/1000.0,2);  // battery volts
     dataFile.print(F("\t"));
     
-    dataFile.print(PoolData[P_LOW_WATER],0);  // low water level
+    if ( (bool)PoolData[P_LID_IS_LEVEL] )
+    { dataFile.print(F("flat\t"));}
+    else
+    { dataFile.print(F("not flat\t"));}
+    
+    dataFile.print(PoolData[P_LOW_WATER],0);  // Level sensor (2 minutes): 0 = level ok, 1 = low water, 2 = offline
     dataFile.print(F("\t"));
     
     
@@ -1120,13 +1130,13 @@ bool logDataToSdCard(char * txtComment)
     for (byte i = 0; i < 8; i++)
     {
       dataFile.print(F("\t"));
-      dataFile.print((sensorStatusbyte >> i) & 1);
+      dataFile.print((sensorStatusByte >> i) & 1);
     }
     // export each bit in the ioStatusbyte
     for (byte i = 0; i < 8; i++)
     {
       dataFile.print(F("\t"));
-      dataFile.print((ioStatusbyte >> i) & 1);
+      dataFile.print((ioStatusByte >> i) & 1);
     }
     dataFile.print(F("\t"));
     dataFile.print(successes);
@@ -1167,7 +1177,7 @@ void PrintPoolData()
   // Print heading every 15 rows
   if (printheadcounter == 0)
   {
-    Serial.println(F("\nTemp1\tTemp2\ttemp3\tAmps\tPres1\tPres2\tPres3\tP-Cnt\tWFmin\tbatt\tstat\tsesnsor\tI/O"));
+    Serial.println(F("\nTemp1\tTemp2\ttemp3\tAmps\tPres1\tPres2\tPres3\tP-Cnt\tWFmin\tbatt\tstat\tsesnsor\t\tI/O"));
     printheadcounter = 15;
   }
   
@@ -1195,10 +1205,13 @@ void PrintPoolData()
   Serial.print(F("\t"));
   Serial.print(PoolData[P_CONTROLLER_STATUS],0);
   Serial.print(F("\t"));
-  Serial.print(sensorStatusbyte, BIN);
+  for (int j = 7; j >= 0; j--)
+  { Serial.print(bitRead(sensorStatusByte, j)); }  // print leading zeros
   Serial.print(F("\t"));
-  Serial.print(ioStatusbyte, BIN);
+  for (int j = 7; j >= 0; j--)
+  { Serial.print(bitRead(ioStatusByte, j)); }  // print leading zeros
   Serial.println();
+
 /*  
   Serial.print(isPreFltrPressSensorOk()); 
   Serial.print(isPostFltrPressSensorOk());
@@ -1344,44 +1357,47 @@ void sendNTPpacket(IPAddress &address)
 // Check pre filter pressure sensor
 bool isPreFltrPressSensorOk()
 {
-  return ((sensorStatusbyte >> 3) & 1);
+  return ((sensorStatusByte >> 3) & 1);
 }
 
 bool isPostFltrPressSensorOk()
 {
-  return ((sensorStatusbyte >> 4) & 1);
+  return ((sensorStatusByte >> 4) & 1);
 }
 
 bool isWaterFillPressSensorOk()
 {
-  return ((sensorStatusbyte >> 5) & 1);
+  return ((sensorStatusByte >> 5) & 1);
 }
 
 bool isPreHtrTempSensorOk()
 {
-  return ((sensorStatusbyte >> 0) & 1);
+  return ((sensorStatusByte >> 0) & 1);
 }
 
 bool isPostHtrTempSensorOk()
 {
-  return ((sensorStatusbyte >> 1) & 1);
+  return ((sensorStatusByte >> 1) & 1);
 }
 
 bool isPumpTempSensorOk()
 {
-  return ((sensorStatusbyte >> 2) & 1);
+  return ((sensorStatusByte >> 2) & 1);
 }
 
 bool isPumpAmpsSensorOk()
 {
-  return ((sensorStatusbyte >> 6) & 1);
+  return ((sensorStatusByte >> 6) & 1);
 }
 
 bool isWaterLevelSensorOk()
 {
-  return ((sensorStatusbyte >> 7) & 1);
+  return ((sensorStatusByte >> 7) & 1);
 }
 
-
+bool isWaterFillValveOpen()
+{
+  return ((ioStatusByte >> 5) & 1);
+}
 
 
