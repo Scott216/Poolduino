@@ -44,6 +44,7 @@ byte 15:    Checksum
  
 Change log
 v1.10 08/17/14  Formatting, changed some #define to const. Added checksum.  Added sendData() function.  Changed packet byte 4 - live level to match 2 minute level
+v1.11 08/26/14  Added test pushbutton and test LED
  
 */
 
@@ -70,6 +71,9 @@ CC1101 cc1101;   // http://code.google.com/p/panstamp/wiki/CC1101class
 
 const byte LOWWATERTIME =         150; // millis doesn't increment when in sleep mode, so you can't use normal milliseconds.  8 seconds = 10mS on millis(), 2 minutes = 150 millis() mS
 const byte WATERLEVELSENSOR_PIN =   8; // level sensor is connected to pin D8
+const byte TEST_PUSHBUTTON_PIN =    7; // Momentary pushbutton to test sensor status
+const byte TEST_LED_PIN =           9; // test LED
+
 #define LOW_WATER LOW                  // Sensor input state is LOW when water level is low
 
 //Define the registers that we will be accessing on the MMA8452
@@ -105,7 +109,17 @@ void setup()
   Serial.begin(9600);
   delay(1000);
   
-  pinMode(WATERLEVELSENSOR_PIN, INPUT_PULLUP);  // water level sensor
+  pinMode(WATERLEVELSENSOR_PIN, INPUT_PULLUP);
+  pinMode(TEST_PUSHBUTTON_PIN,  INPUT_PULLUP);
+  pinMode(TEST_LED_PIN,               OUTPUT);
+
+  digitalWrite(TEST_LED_PIN, HIGH);
+  delay(150);
+  digitalWrite(TEST_LED_PIN, LOW);
+  delay(150);
+  digitalWrite(TEST_LED_PIN, HIGH);
+  delay(150);
+  digitalWrite(TEST_LED_PIN, LOW);
   
   // Initialize the CC1101 RF Chip
   cc1101.init();
@@ -148,6 +162,29 @@ void loop()
   #endif
   
   sendData(waterIsLow);
+  
+  // Test pushbutton.  If Lid is flat, blink 2x, if not, 1x
+  if ( digitalRead(TEST_PUSHBUTTON_PIN) == LOW )
+  {
+    if ( IsLidFlat() )
+    {
+      digitalWrite(TEST_LED_PIN, HIGH);
+      delay(250);
+      digitalWrite(TEST_LED_PIN, LOW);
+      delay(250);
+      digitalWrite(TEST_LED_PIN, HIGH);
+      delay(250);
+      digitalWrite(TEST_LED_PIN, LOW);
+      delay(250);
+    }
+    else
+    {
+      digitalWrite(TEST_LED_PIN, HIGH);
+      delay(250);
+      digitalWrite(TEST_LED_PIN, LOW);
+      delay(250);
+    }
+  }
   
   panstamp.sleepWd(WDTO_8S);  // Sleep for 8 seconds. millis() doesn't increment while sleeping
   
