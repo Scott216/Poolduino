@@ -25,7 +25,7 @@ byte 2:     Water Level 2 Min: 0 = level ok, 1 = level low, 2 = sensor offline
 byte 3:     Water Level LIVE:  0 = level ok, 1 = level low
 byte 4:     Is lid flat: true/false
 byte 5,6:   Accelerometer x-axis value
-byte 7,9:   Accelerometer y-axis value
+byte 7,8:   Accelerometer y-axis value
 byte 9,10:  Accelerometer z-axis value
 byte 11,12: Battery voltage
 byte 13:    Reserved for water leaking inside sensor
@@ -34,7 +34,8 @@ byte 14:    Checksum
  
 Change log
 v1.10 08/17/14  Added checksum. Formatting. Change real time level so 0 = level okay
-v1.11 08/18/14 - changed panStampOk from 0 to 1
+v1.11 08/18/14 - changed panStampOk from 0 to 1.  
+v1.12 08/18/14 - Changed I2C_PACKET_LEN from 16 to 15, renamed some constants
 */
 
 // #define PRINT_DEBUG // comment out to turn off serial printing
@@ -49,20 +50,16 @@ v1.11 08/18/14 - changed panStampOk from 0 to 1
 #define PROGMEM __attribute__(( section(".progmem.data") ))
 
 // The networkAdress of panStamp sender and receiver must be the same
-byte psNetworkAdress =         91;  // Network address for all pool panStamps 
-byte psReceiverAddress =        5;  // Device address of this panStamp
-const byte addrSlaveI2C =      21;  // I2C Slave address of this device
-const byte addrLevelSensor =    1;  // panStamp device address for low water sensor
-const byte panStampOffline =  255;  // Send this to I2C master in the panStamp Rx address to indicate panStamp is offline
-const byte panStampOK      =    1;  // panStamp is successfully transmitting data
-uint32_t psTxTimer = 0; 
-#define PSTIMEOUT 120000      // 2 minute timeout for panStamps.  If no connections in 2 minutes, tell master that panStamp is offline
+byte psNetworkAdress =          91;  // Network address for all pool panStamps
+byte psReceiverAddress =         5;  // Device address of this panStamp
+const byte ADDR_SLAVE_I2C =     21;  // I2C Slave address of this device
+const byte PANSTAMP_OFFLINE =  255;  // Send this to I2C master in the panStamp Rx address to indicate panStamp is offline
+const byte PANSTAMP_OK =         1;  // panStamp is successfully transmitting data
+const byte I2C_PACKET_LEN =     15;  // bytes in I2C Packet
+byte I2C_Packet[I2C_PACKET_LEN];    // Array to hold data sent over I2C to main Arduino
 
-#define I2C_PACKET_LEN 16 // bytes in I2C Packet
-byte I2C_Packet[I2C_PACKET_LEN];   // Array to hold data sent over I2C to main Arduino
-
-CCPACKET packet;  // panStamp data http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/ccpacket.h
-
+// panStamp data http://code.google.com/p/panstamp/source/browse/trunk/arduino/libraries/panstamp/ccpacket.h
+CCPACKET packet;
 
 // The connection to the hardware chip CC1101 the RF Chip
 CC1101 cc1101;  // http://code.google.com/p/panstamp/wiki/CC1101class
@@ -91,7 +88,7 @@ void setup()
 {
   Serial.begin(9600);
 
-  Wire.begin(addrSlaveI2C);    // Initiate the Wire library and join the I2C bus 
+  Wire.begin(ADDR_SLAVE_I2C);    // Initiate the Wire library and join the I2C bus
   Wire.onRequest(wireRequestEvent); // Register a function to be called when a master requests data from this slave device. 
  
   cc1101.init(); // initialize the RF Chip in panStamp
@@ -117,7 +114,6 @@ void setup()
     Serial.println(cc1101.devAddress);
   #endif
   
-  psTxTimer = millis() + PSTIMEOUT;  // Initialize Tx timeout timer
 
 }  // end setup()
 
@@ -125,6 +121,8 @@ void setup()
 //========================================================================================================================================
 void loop()
 {
+  const uint32_t PSTIMEOUT = 120000;  // 2 minute timeout for panStamps.  If no connections in 2 minutes, tell master that panStamp is offline
+  static uint32_t psTxTimer = millis() + PSTIMEOUT;  // Initialize Tx timeout timer
   
   // Get data from water level sensor panStamp
   if(psPacketAvailable)
@@ -166,8 +164,8 @@ void loop()
       #endif
        
         // Copy data from panStamp packet to I2C packet array
-        I2C_Packet[0] = addrSlaveI2C;
-        I2C_Packet[1] = panStampOK;
+        I2C_Packet[0] = ADDR_SLAVE_I2C;
+        I2C_Packet[1] = PANSTAMP_OK;
         I2C_Packet[2] = packet.data[3];    // Low water level, Water level sensor 0 = level ok, 1 = level is low, 2 = sensor offline
         I2C_Packet[3] = packet.data[4];    // Real time Low water level: true = low water, false = water ok
         I2C_Packet[4] = packet.data[5];    // Is Lid Flat: true/false
@@ -181,9 +179,9 @@ void loop()
         I2C_Packet[12] = packet.data[13];  // Battery voltage
         I2C_Packet[13] = packet.data[14];  // Reserved for leak detected in electronics
         // checksum
-        I2C_Packet[14] = 0;
-        for (byte cs = 0; cs < 14; cs++)
-        { I2C_Packet[14] += I2C_Packet[cs]; }
+        I2C_Packet[I2C_PACKET_LEN - 1] = 0;
+        for ( byte cs = 0; cs < I2C_PACKET_LEN - 1; cs++ )
+        { I2C_Packet[I2C_PACKET_LEN - 1] += I2C_Packet[cs]; }
                                  
       } // packet is okay
     }  // got packet
@@ -196,13 +194,13 @@ void loop()
   if ((long)(millis() - psTxTimer) > 0 )    
   { 
     // panStamp is offline, set I2C packet appropriately
-    memset(I2C_Packet,0,sizeof(I2C_Packet));  // clear array
-    I2C_Packet[0] = addrSlaveI2C;
-    I2C_Packet[1] = panStampOffline;
-    I2C_Packet[2] = 2; // 2 = offline
+    memset(I2C_Packet, 0, sizeof(I2C_Packet));  // clear array
+    I2C_Packet[0] = ADDR_SLAVE_I2C;
+    I2C_Packet[1] = PANSTAMP_OFFLINE;
+    I2C_Packet[2] = 2; // water level offline
     // checksum
     for (byte cs = 0; cs < 3; cs++)
-    { I2C_Packet[14] += I2C_Packet[cs]; }
+    { I2C_Packet[I2C_PACKET_LEN - 1] += I2C_Packet[cs]; }
                                  
   }  // end psPacketAvailable
   
