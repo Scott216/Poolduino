@@ -10,7 +10,8 @@ To Do:
 Delay after you receive an alarm and check again in a couple seconds
 Try uploading to Xively without Xively.h library to see if you can reduce the program size
 Tweet if heater is on and temp > 85
-
+Limit sensor trouble tweets to 5/day and reset counter at midnight.
+ 
 SD Card info: 
 Format FAT 16
 File name format: 8.3
@@ -37,10 +38,13 @@ v1.56  07/02/14 - Added condition to check for Leonardo and to use Serial1 inste
 v1.57  07/10/14 - Added PROGMEM statement to get rid of compiler warnigs
 v1.58  07/30/14 - added column in log file for low water level.  Modified twitter alarms so tweet would only go out if 2 alarms were received a couple seconds apart.  Should help with false positives
 v1.59  08/17/14 - Changed some heading in log file. Added new Xbee shield that uses Serial1 (pins D18-19 on Mega). Added Is lid level to xbee data
- 
+v1.60  09/05/14 - Add alerts if water is low and can't fill anymore.  Removed enum PoolDataIndex - it wasn't being used properly
+                  Fixed bug in ReadXBeeData() where it wasn't reading last byte (ioStatusByte) - introduced when testing out checksum
+v1.61  09/09/14 - Limit Xbee communication failure tweets to 4/day
 */
-#define VERSION "v1.59"
-#define PRINT_DEBUG     // Comment out to turn off printing
+
+#define VERSION "v1.61"
+#define PRINT_DEBUG     // Comment out to turn off serial printing
 
 #include <SPI.h>             // Communicate with SPI devices http://arduino.cc/en/Reference/SPI
 #include <Ethernet.h>        // LIbrary for Arduino ethernet shield http://arduino.cc/en/Reference/Ethernet
@@ -63,31 +67,28 @@ const byte SD_CARD_SS =   4;
 const byte SPI_ENABLE  = 53;  // Must be defined as an output for SPI to work properly
 // D10 is reserved for Etherent SS
 
-
 // Index positions for PoolData[] array
-enum PoolDataIndex {
- P_TEMP1 = 0,           // Temperature before heater
- P_TEMP2,               // Temperature after
- P_TEMP_PUMP,           // Pump housing temperature
- P_PUMP_AMPS,           // Amps pump is using
- P_PRESSURE1,           // Pressure before filter
- P_PRESSURE2,           // Pressure after filter
- P_PRESSURE3,           // Pressure of water fill line
- P_LOW_PRES_CNT,        // Counts times pressure was low
- P_CONTROLLER_STATUS,   // Controller status 0-8
- P_WATER_FILL_MINUTES,  // Minutes water fill valve was open today
- P_LID_IS_LEVEL,        // Is lid level on water level sensor
- P_POOL_TIME,           // Pool time from RTC, 2:45 PM = 14.75
- P_WATER_LVL_BATT,      // Water level battery voltage
- P_LOW_WATER,           // Low water sensor: 0 = level ok, 1 = low water, 2 = offline
- P_SENSORSTATUSBYTE,    // Sensor Inputs Status Byte: 1 if sensor is working properly, 0 of not
- P_IOSTATUSBYTE,        // Discrete I/O status byte: shows on/off state if I/O
- NUM_POOL_DATA_PTS      // Number of data points in pool array xbee packet
-};
+const uint8_t P_TEMP1 =              0;  // Temperature before heater
+const uint8_t P_TEMP2 =              1;  // Temperature after
+const uint8_t P_TEMP_PUMP =          2;  // Pump housing temperature
+const uint8_t P_PUMP_AMPS =          3;  // Amps pump is using
+const uint8_t P_PRESSURE1 =          4;  // Pressure before filter
+const uint8_t P_PRESSURE2 =          5;  // Pressure after filter
+const uint8_t P_PRESSURE3 =          6;  // Pressure of water fill line
+const uint8_t P_LOW_PRES_CNT =       7;  // Counts times pressure was low
+const uint8_t P_CONTROLLER_STATUS =  8;  // Controller status 0:pump off, 1:pump on, 2:switch in off position, 3:water filling, 4:Fluctuations, 5:Low Pressure, 6:Hi amps, 7:hi temp, 8:remote shutdown
+const uint8_t P_WATER_FILL_MINUTES = 9;  // Minutes water fill valve was open today
+const uint8_t P_LID_IS_LEVEL =      10;  // Is lid level on water level sensor
+const uint8_t P_POOL_TIME =         11;  // Pool time from RTC, 2:45 PM = 14.75
+const uint8_t P_WATER_LVL_BATT =    12;  // Water level battery voltage
+const uint8_t P_LOW_WATER =         13;  // Low water sensor: 0 = level ok, 1 = low water, 2 = offline
+const uint8_t P_SENSORSTATUSBYTE =  14;  // Sensor Inputs Status Byte: 1 if sensor is working properly, 0 of not
+const uint8_t P_IOSTATUSBYTE =      15;  // Discrete I/O status byte: shows on/off state if I/O
+const uint8_t NUM_POOL_DATA_PTS =   16;  // Number of data points in pool array xbee packet
+const uint8_t SOMETHING_IS_WRONG =   4;  // If P_CONTROLLER_STATUS is 4 or higher, there was a shutdown
 
 byte sensorStatusByte;          // Each bit determines if sensor is operating properly
 byte ioStatusByte;              // Each bit shows input value of digital I/O
-
 
 // Number of Xively Streams
 #define NUM_XIVELY_STREAMS  16
@@ -349,6 +350,7 @@ void checkAlarms()
   static alarmFlag tf_waterFillOn;        // Water fill valve is on
   static alarmFlag tf_heaterIsOn;         // Heater is on
   static alarmFlag tf_Xbee_Comm;          // Xbee communication, send alert if no comm
+  static alarmFlag tf_cantAddWater;       // Need water, but water fill valve isn't open
   // flags for sensor status.
   static alarmFlag tf_preHeatTemperatureSensor;
   static alarmFlag tf_postHeatTemperatureSensor;
@@ -358,7 +360,7 @@ void checkAlarms()
   static alarmFlag tf_waterFillPressureSensor;
   static alarmFlag tf_pumpAmpsSensor;
   static alarmFlag tf_waterLevelSensor;
-  const uint16_t ALARM_DELAY = 2000; 
+  const uint16_t ALARM_DELAY = 2000;
   
   
   char msgAlarm[STRLEN_MAX_TWEET];    // Holds text for twitter message.  Should be big enough for message and timestamp
@@ -474,8 +476,31 @@ void checkAlarms()
   if( PoolData[P_LOW_PRES_CNT] == 0 )
   { tf_lowPressure = NO_ALARM; }
 
-  // Check for emergency shutdown and send tweet
-  if( PoolData[P_CONTROLLER_STATUS] >= 4 && tf_emergencyShutdown != ALARM_2 )
+  
+  // Need water but water fill valve isn't open
+  // Water fill valve won't open if max water fill minutes was reached or there is not water pressure
+  if ( PoolData[P_LOW_WATER] == 1 && isWaterFillValveOpen() == false && tf_cantAddWater != ALARM_2 )
+  {
+    if( tf_cantAddWater == NO_ALARM )
+    {
+      tf_cantAddWater = ALARM_1;
+      delay(ALARM_DELAY);
+    }
+    else
+    {
+      strcpy(msgAlarm, "Need water");
+      logDataToSdCard(msgAlarm);
+      SendTweet(msgAlarm);
+      tf_cantAddWater = ALARM_2;
+    }
+  }
+  
+  // Reset can't add water flag
+  if( isWaterFillValveOpen() )
+  { tf_cantAddWater = NO_ALARM; }
+  
+  // Check for emergency shutdown
+  if( PoolData[P_CONTROLLER_STATUS] >= SOMETHING_IS_WRONG && tf_emergencyShutdown != ALARM_2 )
   {
     if( tf_emergencyShutdown == NO_ALARM )
     {
@@ -498,13 +523,13 @@ void checkAlarms()
   }
 
   // Reset emergency shutdown flag
-  if( PoolData[P_CONTROLLER_STATUS] < 4 )
+  if( PoolData[P_CONTROLLER_STATUS] < SOMETHING_IS_WRONG )
   { tf_emergencyShutdown = NO_ALARM; }
   
   // Send Tweet if water fill has started
   if( isWaterFillValveOpen() && tf_waterFillOn != ALARM_2 )
   {
-    // Wait a couple seconds in case water fill button is pressed a couple times, then read XBee data again
+    // Wait a couple seconds in case water fill button is pressed a couple times, then read XBee data again    - srg this alarm doesn't seem to be working
     delay(2500);
     uint16_t xbeeID;
     ReadXBeeData(&xbeeID);
@@ -571,7 +596,8 @@ void checkAlarms()
   }
 
   // Send alert if xbee communication is lost for 10 mintues
-  if( (long)(millis() - xbeeLastRxTime) > 600000L  && tf_Xbee_Comm != ALARM_2 )
+  static byte xbeeTweetCounter = 0; // don't send more then 4 xbee comm failures per day
+  if( (long)(millis() - xbeeLastRxTime) > 600000L  && tf_Xbee_Comm != ALARM_2 && xbeeTweetCounter < 3 )
   {
     if( tf_Xbee_Comm == NO_ALARM )
     {
@@ -584,6 +610,7 @@ void checkAlarms()
       logDataToSdCard(msgAlarm); 
       SendTweet(msgAlarm);
       tf_Xbee_Comm = ALARM_2;
+      xbeeTweetCounter++;
     }
   }
   
@@ -764,14 +791,19 @@ void checkAlarms()
   if ( isWaterLevelSensorOk() )
   { tf_waterLevelSensor = NO_ALARM;}
 
-  // At 11:01 PM reset flags for pump running at night, not running in day, and heater is on
+  // At 11:01 PM reset flags for:
+  //   pump running at night
+  //   Pump not running in day
+  //   heater is on
+  //   Xbee communication failure
   if(hour() == 23 && minute() == 1 && second() < 10 )
   {
     // Reset twitter flags
     tf_pumpOnAtNight = NO_ALARM;
     tf_pumpOffInDay =  NO_ALARM;
     tf_heaterIsOn =    NO_ALARM;
-    delay(10000); // delay 10 seconds to prevent multiple tweets from going out
+    xbeeTweetCounter = 0;
+    delay(10000); // delay 10 seconds to prevent multiple tweets from going out at 11 PM
   }
 
   // tf_pumpOffInDay flag can also be reset if pump it turned back on
@@ -1005,7 +1037,7 @@ bool ReadXBeeData(uint16_t *Tx_Id)
       *Tx_Id = rx16.getRemoteAddress16();        // MY ID of Tx, remember MY is set as a hex number.  Useful if you have multiple transmitters
       
       // Convert data from bytes to integers
-      for(int i=0; i < dataLength - 2; i=i+2)
+      for(int i=0; i < dataLength; i=i+2)
       {
         RxData[i/2]  = rx16.getData(i) << 8;
         RxData[i/2] |= rx16.getData(i+1);
@@ -1015,7 +1047,7 @@ bool ReadXBeeData(uint16_t *Tx_Id)
       // Put status bytes into byte variables
       sensorStatusByte = PoolData[P_SENSORSTATUSBYTE];    // Each bit determines if sensor is operating properly
       ioStatusByte     = PoolData[P_IOSTATUSBYTE];        // I/O state of digital I/O
-      
+
       gotNewData = true;
       xbeeLastRxTime = millis();  // Got data from xbee, so reset with current time
       xBeeTimeoutFlag = false;    // reset flag
