@@ -5,7 +5,11 @@ GitHub Repo: http://git.io/xzlBSQ
  
 To do: 
 Calibrate pressure sensors
+Better pressure fluctuation sensing
+Add delay for fisrt stats sample if pump just turned on. 
+Clear stats when pump is turned off
 
+ 
  
 Change log
 v1.50 07/01/14 - Added delay in pump off to stop false positives for pump amp sensor status. Changed xbee.begin(9600); and restored old xbee library.  Having problems with new library from Feb 2014
@@ -17,20 +21,23 @@ v1.54 07/24/14 - Changed water fill max from 120 to 60, formatting,
 v1.55 08/03/14 - changed how minutes per day of water fill is tracked. Will show each minute instead of 15-minute steps.  Added enum waterLevel_t
 v1.56 08/17/14 - Added checksum to I2C. Changed live level sensor so level ok = 0. Replaced water countdown with flat lid in Xbee packet byte 10
 v1.57 08/18/14 - changed PANSTAMP_ONLINE from 0 to 1.  Getting a lot of checksum errors.  When there's an error every element but checksum is 0, so I didn't want 0 to be a valid value for PANSTAMP_ONLINE
-                 This also seemed to fix problem where the sensorstatus byte was sometimes reporting level sensor as being okay, when I had it disconnected
-*/
+                 This also seemed to fix problem where the sensorstatus byte was sometimes reporting level sensor as being okay (bit 7), when I had it disconnected
+v1.58 09/07/14 - Increased max water fill time from 60 to 90 minutes. Added statistic.h library to calc max and stdev of pre-filter pressure in order to better detect oscillations
+                 Added enum emergencyStatus_t & poolStatus_t
+ */
 
-#define VER "v1.57"
+#define VER "v1.58"
 
 #define PRINT_DEBUG   // Comment out if not debugging
 
 #include "Pool_Controller_Outside_Library.h"
-#include <Wire.h>       // http://www.arduino.cc/en/Reference/Wire
-#include <RTClib.h>     // http://github.com/adafruit/RTClib
-#include <XBee.h>       // http://code.google.com/p/xbee-arduino/     Modified per http://arduino.cc/forum/index.php/topic,111354.0.html
-#include <Button.h>     // For pushbutton http://github.com/carlynorama/Arduino-Library-Button
-#include <OneWire.h>    // http://www.pjrc.com/teensy/td_libs_OneWire.html  http://playground.arduino.cc/Learning/OneWire
+#include <Wire.h>              // http://www.arduino.cc/en/Reference/Wire
+#include <RTClib.h>            // http://github.com/adafruit/RTClib
+#include <XBee.h>              // http://code.google.com/p/xbee-arduino/     Modified per http://arduino.cc/forum/index.php/topic,111354.0.html
+#include <Button.h>            // For pushbutton http://github.com/carlynorama/Arduino-Library-Button
+#include <OneWire.h>           // http://www.pjrc.com/teensy/td_libs_OneWire.html  http://playground.arduino.cc/Learning/OneWire
 #include <DallasTemperature.h> // http://milesburton.com/index.php?title=Dallas_Temperature_Control_Library
+#include "Statistic.h"         // http://playground.arduino.cc/Main/Statistics
 
 // This gets rid of compiler warning:  Only initialized variables can be placed into program memory area
 #undef PROGMEM
@@ -51,7 +58,7 @@ v1.57 08/18/14 - changed PANSTAMP_ONLINE from 0 to 1.  Getting a lot of checksum
 #define ONE_WIRE_BUS         5   // OneWire temperture sensor bus
 #define OLED_RST             6   // OLED display reset
 #define HEAT_OUTPUT          7   // Turn on heater
-// D8 Reserved for remote LED (if needed)
+// D8 Reserved for remote LED display (if reset pin is needed)
 #define PUMP_OUTPUT          9   // Turns pump on/off
 #define WATER_FILL_PB_LED   10   // LED on Water Fill Pushbutton
 #define WATER_OUTPUT        11   // Controls water fill solenoid valve
@@ -76,25 +83,28 @@ const uint32_t ACK_RESPONSE_WAIT_TIME =   250;  // Time (mS) program waits for a
 const float    PUMP_ON_TIME =             7.5;  // 7:30 AM, Time to turn pump on each day
 const float    PUMP_OFF_TIME =           19.0;  // 7:00 PM, Time to turn pump off each day
 #define        XBEE_MY_ADDR_RX          0x250   // The MY address of the Rx XBee (don't use const byte). Don't care what the MY address is of Tx as long as it's not the same as Rx
-const uint32_t WATER_FILL_BP_MIN =     908000;  // 15 minutes added to water fill timer
+const uint32_t WATER_FILL_15_MIN =     908000;  // 15 minutes added to water fill timer
 const byte     WATER_FILL_PRESS_THRESH =   20;  // If water fill pressure is > then thershold, you can assume garden hose is connected to water fill
 const byte     PRESSURE_TRANSDUCER_TYPE = 100;  // Can use either 100 PSI sensor or 30 PSI sensor
                                                 // With 0-30PSI transducer, analog input = 1023 at with valve off, 290 with valve open, 190 with hose diconnected
-const byte MAX_WATER_FILL_MINUTES =       60;   // Maximum number of minutes water can be added each day.  Reset at 11 PM. Refactored some of the comples if() statements
+const byte MAX_WATER_FILL_MINUTES =       90;   // Maximum number of minutes water can be added each day.  Reset at 11 PM. Refactored some of the comples if() statements
 const byte PANSTAMP_ONLINE =               1;   // panStamp status, 0 = online, 255 = offline
-
+const uint32_t SAMPLE_TIME =           10000;   // Sample time for pre-filter pressure - used in statisic library
 
 // Status code to send to inside Arduino
 // Indicated current state of poolc controller
-byte poolStatus;
-const byte  STATUS_PUMP_OFF =                   0;
-const byte  STATUS_PUMP_ON =                    1;
-const byte  STATUS_PUMP_SWITCH_OFF =            2;
-const byte  STATUS_ADDING_WATER =               3;
-const byte  STATUS_EMERGENCY_LOW_PRESS_FLUCT =  4;  // low pressure because of fluctuations
-const byte  STATUS_EMERGENCY_LOW_PRESS_COUNT =  5;  // continious low pressure for 5 mintutes
-const byte  STATUS_EMERGENCY_HI_AMPS =          6;
-const byte  STATUS_EMERGENCY_HI_PUMP_TEMP =     7;
+enum poolStatus_t
+{
+  STATUS_PUMP_OFF,
+  STATUS_PUMP_ON,
+  STATUS_PUMP_SWITCH_OFF,
+  STATUS_ADDING_WATER,
+  STATUS_EMERGENCY_LOW_PRESS_FLUCT,  // low pressure because of fluctuations  srgg
+  STATUS_EMERGENCY_LOW_PRESS_COUNT,  // continious low pressure for 5 mintutes
+  STATUS_EMERGENCY_HI_AMPS,
+  STATUS_EMERGENCY_HI_PUMP_TEMP
+};
+poolStatus_t poolStatus;
 
 enum waterLevel_t { WATER_LEVEL_OK, LOW_WATER, LEVEL_SENSOR_OFFLINE };
 waterLevel_t lowWaterLevel = WATER_LEVEL_OK;   // Water level ok = 0, water level low = 1, sensor offline = 2
@@ -103,6 +113,9 @@ bool isLidLevel = false; // Level sensor lid, flat = true
 
 // Initialize Real Time Clock
 RTC_DS1307 RTC;
+
+// statistics for prefilter pressure
+Statistic preFilterPressureStats;
 
 const byte ADDR_SLAVE_I2C =  21;  // I2C Slave address of RX panStamp
 const byte I2C_PACKET_SIZE = 15;  // I2C Packet size
@@ -129,8 +142,9 @@ uint8_t xbeePayload[NUM_DATA_PTS * 2];
 Tx16Request tx = Tx16Request(XBEE_MY_ADDR_RX, xbeePayload, sizeof(xbeePayload));
 TxStatusResponse txStatus = TxStatusResponse();
 
-uint32_t WaterFillTimer;       // Timer to turn on water fill valve, adds 15 minutes every time pushbutton is pressed
-byte    EmergencyShutdown;    // shuts down pump if there a problem.  0 = OK, 1 = low pressure, 2 = high amps, 3= high pump temperature
+uint32_t WaterFillTimer;      // Timer to turn on water fill valve, adds 15 minutes every time pushbutton is pressed
+enum emergencyStatus_t {EVERYTHING_OK, LOW_PRESSURE, HIGH_AMPS, HIGH_PUMP_TEMP};
+emergencyStatus_t  EmergencyShutdown;    // shuts down pump if there a problem.  0 = OK, 1 = low pressure, 2 = high amps, 3 = high pump temperature
 bool    presFluctResetFlag;   // Reset when pressure goes back to normal.  Used in conjunction with counter
 
 
@@ -152,7 +166,7 @@ uint16_t presFluctCounter = 0;   // Counts low pressure fluctuations
 bool getI2CData();
 void setIoStatusByte();
 bool sendXbeeData();
-void printDebugFunction();
+void printDebugFunction(bool lowPressTmr, float lowPresThreshold);
 bool isNewMinute();
 bool isNewDay();
 
@@ -199,16 +213,17 @@ void setup()
   // RTC.adjust(DateTime(__DATE__, __TIME__));
   
   WaterFillTimer = millis();
-  EmergencyShutdown = 0; // everything okay
+  EmergencyShutdown = EVERYTHING_OK;
   poolStatus = STATUS_PUMP_OFF;
   presFluctResetFlag = true; // set flag to true so no low pressue warning are given until pressure builds up
 //  startupLowPressFlag == false;  // Reset flag
+  
+  preFilterPressureStats.clear(); // Clear statistic stats
   
 #ifdef PRINT_DEBUG
   Serial.print(F("Finished setup() "));
   Serial.println(VER);
 #endif
-  
   
 } // setup()
 
@@ -217,13 +232,16 @@ void setup()
 //============================================================================
 void loop()
 {
-  static uint32_t SensorTimer;         // Timer for reading sensor every second
-  static uint32_t TX_Timer;            // Timer to send data to house
-  static uint32_t ReadTime;            // Timer for reading the Real Time Clock
-  static uint32_t debounceTimer;       // Used to prevent double entries of water fill pushbutton
-  static uint32_t waterFillResetTime;  // Used to time how long the water fill pushbutton is held.  If over 2 seconds, then reset water fill
-  static uint32_t lowPressTimer;       // Times how long the pressure is low, used to shutdown pump if there is a problem
-  static bool isLowPressTimerRunning;  // Flag for low pressure timer, true if low pressure timer has started
+  static uint32_t SensorTimer;          // Timer for reading sensor every second
+  static uint32_t TX_Timer;             // Timer to send data to house
+  static uint32_t ReadTime;             // Timer for reading the Real Time Clock
+  static uint32_t debounceTimer;        // Used to prevent double entries of water fill pushbutton
+  static uint32_t waterFillResetTime;   // Used to time how long the water fill pushbutton is held.  If over 2 seconds, then reset water fill
+  static uint32_t lowPressTimer;        // Times how long the pressure is low, used to shutdown pump if there is a problem
+  static uint32_t statsSampleTimer = 0; // Timer for pre-filter pressure sampling
+  static bool isLowPressTimerRunning;   // Flag for low pressure timer, true if low pressure timer has started
+  static float lowPreFilterPressureThreshold = 15; // Pressure setting used to count pressure fluctuations when pump is starved for water.  Threshold is adjusted by max operating pressure.
+  
   
   // Get Time from RTC every 15 seconds
   // Combine hours and minutes into a decimal. i.e. 2:15:00 PM = 14.25
@@ -243,7 +261,7 @@ void loop()
   bool isWaterLevelLow = lowWaterLevel == LOW_WATER;
   bool isOkToAddWater = waterAddedToday <= MAX_WATER_FILL_MINUTES;
   if ( isWaterFillPressureOkay && isWaterFillValveClosed && isWaterLevelLow && isOkToAddWater )
-  { WaterFillTimer = millis() + WATER_FILL_BP_MIN; } // this will turn on water fill
+  { WaterFillTimer = millis() + WATER_FILL_15_MIN; } // this will turn on water fill
     
   // Check for water fill pushbutton
   // Quick push will turn on water fill valve.  Holding pushbutton in will cancel water fill operation
@@ -254,9 +272,9 @@ void loop()
     
     // Add time to water fill timer
     if( WaterFillTimer <= millis() && pressure[WATER_FILL_PRESSURE] > WATER_FILL_PRESS_THRESH && digitalRead(WATER_OUTPUT) == LOW )  // need to check for pressure here becuse if valve is already open, pressure will be low
-    {  WaterFillTimer = millis() + WATER_FILL_BP_MIN; } // Water fill is off, add 15 minutes to timer
+    {  WaterFillTimer = millis() + WATER_FILL_15_MIN; } // Water fill is off, add 15 minutes to timer
     else if( digitalRead(WATER_OUTPUT) == HIGH )
-    { WaterFillTimer += WATER_FILL_BP_MIN; } // Water fill is already on, add another 15 minutes. Don't check water fill pressure because it will be low since valve is already open
+    { WaterFillTimer += WATER_FILL_15_MIN; } // Water fill is already on, add another 15 minutes. Don't check water fill pressure because it will be low since valve is already open
     debounceTimer = millis() + 200;
   }
 
@@ -277,7 +295,7 @@ void loop()
   { // Turn water fill off
     digitalWrite(WATER_OUTPUT, LOW);
     if( poolStatus == STATUS_ADDING_WATER )
-    { poolStatus = 0; } // Reset poolStatus when valve is turned off
+    { poolStatus = STATUS_PUMP_OFF; } // Reset poolStatus when valve is turned off
   }
  
   // Turn on pushbutton LED when water fill valve is running
@@ -287,9 +305,26 @@ void loop()
   // Track number of minutes water fill valve is opened each day
   if( isNewMinute() && digitalRead(WATER_OUTPUT) == HIGH )
   { waterAddedToday++; }
+
+  // Sample pre-filter pressure for maximum pressure calculation
+  if ( (long)(millis() - statsSampleTimer) > 0 && digitalRead(PUMP_OUTPUT) == HIGH )
+  {
+    // clear stats after 30 minutes
+    if ( preFilterPressureStats.count() > ( 1800000UL / SAMPLE_TIME ) )
+    { preFilterPressureStats.clear(); }
+    
+    preFilterPressureStats.add(pressure[PRE_FILTER_PRESSURE]);
+    
+    // If there are over 10 samples and pressure is in a normal range
+    // Then set the nominal pre-filter pressure
+    if ( preFilterPressureStats.count() >= 8 && pressure[PRE_FILTER_PRESSURE] > 14.0 )
+    { lowPreFilterPressureThreshold = preFilterPressureStats.maximum() - 3.0; }
+    
+    statsSampleTimer = millis() + SAMPLE_TIME;
+  }
   
   // If low pressure is detected, increase counter, only if water fill valve is closed
-  if( pressure[PRE_FILTER_PRESSURE] < 13 &&
+  if( pressure[PRE_FILTER_PRESSURE] < lowPreFilterPressureThreshold &&
       presFluctResetFlag == false &&
       digitalRead(WATER_OUTPUT) == LOW &&
       digitalRead(PUMP_OUTPUT) == HIGH )
@@ -298,8 +333,8 @@ void loop()
     presFluctResetFlag = true;
   }
   
-  // Reset flag for low pressure counter once pre filter pressure increases
-  if( pressure[PRE_FILTER_PRESSURE] > 17 && presFluctResetFlag == true )
+  // Reset flag for low pressure counter once pre-filter pressure increases
+  if( pressure[PRE_FILTER_PRESSURE] > (lowPreFilterPressureThreshold + 3.0) && presFluctResetFlag == true )
   { presFluctResetFlag = false; }
   
   // If low pressure counter >= 20, and there is water fill pressure, then add 2x the pushbutton amount (30 min)
@@ -310,7 +345,7 @@ void loop()
      waterAddedToday < MAX_WATER_FILL_MINUTES &&
      pressure[WATER_FILL_PRESSURE] > WATER_FILL_PRESS_THRESH )
   {
-    WaterFillTimer = millis() + (2 * WATER_FILL_BP_MIN);  // Add water for 30 minutes
+    WaterFillTimer = millis() +  WATER_FILL_15_MIN;  // Add water
     presFluctCounter = 0;  // Reset low pressure counter; counter won't count up when water fill valve is on
     presFluctResetFlag = false;  // set to false so counter has chance to start again. If pressure never gets above 15, it won't reset
   }
@@ -327,41 +362,40 @@ void loop()
     Serial.println(F("Low pressure timer started"));
   }
 
-
   // If pressure returns to normal or pump is off, reset low pressure timer flag
-  if( pressure[PRE_FILTER_PRESSURE] > 14 || digitalRead(PUMP_OUTPUT) == LOW )
+  if( pressure[PRE_FILTER_PRESSURE] > (lowPreFilterPressureThreshold + 3.0) || digitalRead(PUMP_OUTPUT) == LOW )
   { isLowPressTimerRunning = false; }
   
   // Shutdown pump if amps are too high
   // Need to reboot Arduino to restart
-  if( PumpAmps > 20 && EmergencyShutdown == 0 )
+  if( PumpAmps > 20 && EmergencyShutdown == EVERYTHING_OK )
   {
-    EmergencyShutdown = 3;
+    EmergencyShutdown = HIGH_AMPS;
     poolStatus = STATUS_EMERGENCY_HI_AMPS;
   }
   
   // Shutdown pump if motor temp is too high
   // Need to reboot Arduino to restart
-  if( temperature[PUMP_TEMP] > 180 && EmergencyShutdown == 0 )
+  if( temperature[PUMP_TEMP] > 180 && EmergencyShutdown == EVERYTHING_OK )
   {
-    EmergencyShutdown = 2;
+    EmergencyShutdown = HIGH_PUMP_TEMP;
     poolStatus = STATUS_EMERGENCY_HI_PUMP_TEMP;
   }
-  
+
   // Shutdown pump if low pressure counter goes to high
   // Counter will reset each time it reaches 20, and water is added.  But if there is not water fill pressure or
   // after MAX_WATER_FILL_MINUTES minutes of water is added, it will not reset, but keep qoing up.
   // Or if water to the water fill line is off, then pressue will be low and water won't be added
-  if( presFluctCounter > 25 && EmergencyShutdown == 0 )
+  if( presFluctCounter > 25 && EmergencyShutdown == EVERYTHING_OK )
   {
-    EmergencyShutdown = 1;
+    EmergencyShutdown = LOW_PRESSURE;
     poolStatus = STATUS_EMERGENCY_LOW_PRESS_FLUCT;
   }
   
   // If pressure has been low for 5 minutes straight, shut down pump
-  if( (long)(millis() - lowPressTimer) > 0 && isLowPressTimerRunning == true && EmergencyShutdown == 0 )
+  if( (long)(millis() - lowPressTimer) > 0 && isLowPressTimerRunning && EmergencyShutdown == EVERYTHING_OK )
   {
-    EmergencyShutdown = 1;
+    EmergencyShutdown = LOW_PRESSURE;
     poolStatus = STATUS_EMERGENCY_LOW_PRESS_COUNT;
   }
 
@@ -371,8 +405,13 @@ void loop()
   bool isDayTime = (poolTime >= PUMP_ON_TIME  &&  poolTime <= PUMP_OFF_TIME);
   bool pumpSwitchAutoMode = (digitalRead(PUMP_INPUT_AUTO) == PUMP_SWITCH_ON);
   bool pumpSwitchManualMode = (digitalRead(PUMP_INPUT_MAN) == PUMP_SWITCH_ON);
-  if( (isDayTime && pumpSwitchAutoMode && EmergencyShutdown == 0 ) || pumpSwitchManualMode )
+  if( (isDayTime && pumpSwitchAutoMode && EmergencyShutdown == EVERYTHING_OK ) || pumpSwitchManualMode )
   { // Turn Pump On
+    
+    // See if pump is turning on now - oneshot
+    if (digitalRead(PUMP_OUTPUT) == LOW )
+    { statsSampleTimer = millis() + 30000UL; } // Initialize timer so pre-filter pressure samples start 30 seconds after pump comes on
+    
     digitalWrite(PUMP_OUTPUT, HIGH);
     if( poolStatus <= STATUS_PUMP_SWITCH_OFF )
      { poolStatus = STATUS_PUMP_ON; }   // set pool status to Pump On, don't override higher status codes
@@ -388,7 +427,7 @@ void loop()
   if( !pumpSwitchAutoMode && !pumpSwitchManualMode )  // pump switch is off if it's in neither Auto or On modes
   {
     poolStatus = STATUS_PUMP_SWITCH_OFF;
-    EmergencyShutdown = 0;
+    EmergencyShutdown = EVERYTHING_OK;
     presFluctCounter = 0;  // Reset low pressure counter; counter won't count up when water fill valve is on
     presFluctResetFlag = false;  // set to false so counter has chance to start again. If pressure never gets above 15, it won't reset
   }
@@ -508,7 +547,7 @@ void loop()
     TX_Timer = millis() + TX_INTERVAL;  // every 2 secoonds
     sendXbeeData();   // Transmit data to inside Xbee
     
-    printDebugFunction(); // srg - use to debug sketch
+    printDebugFunction(isLowPressTimerRunning, lowPreFilterPressureThreshold); // srg - use to debug sketch
   }
   
   // Reset minutes of water added today counter and low pressure counter at midnight
@@ -583,7 +622,7 @@ bool sendXbeeData()
   xbeeData[13] = (int) (lowWaterLevel)                 * 10;
   xbeeData[14] = (int) (sensorStatusByte)              * 10;
   xbeeData[15] = (int) (ioStatusByte)                  * 10;
-  
+
   // Transmit data
   // break down integers into two bytes and place in payload
   for(int i=0; i < NUM_DATA_PTS; i++)
@@ -743,8 +782,7 @@ bool isNewDay()
 } // isNewDay()
 
 
-
-void printDebugFunction()  
+void printDebugFunction(bool lowPressTmr, float lowPresThreshold)
 {
 
   for (int j = 7; j >= 0; j--)
@@ -757,21 +795,28 @@ void printDebugFunction()
   Serial.print("\t");
   Serial.print(isLidLevel);
   Serial.print("\t");
-  Serial.print(analogRead(WATER_FILL_PRESSURE_PIN));
-  Serial.print("\t");
   Serial.print(pressure[WATER_FILL_PRESSURE]);
-  Serial.print("\t");
-  Serial.print(analogRead(PRESSURE1_PIN));
   Serial.print("\t");
   Serial.print(pressure[PRE_FILTER_PRESSURE]);
   Serial.print("\t");
-  Serial.print(analogRead(PRESSURE2_PIN));
+  Serial.print(lowPressTmr);
   Serial.print("\t");
   Serial.print(pressure[POST_FILTER_PRESSURE]);
   Serial.print("\t");
   Serial.print(poolStatus);
   Serial.print("\t");
   Serial.print(VER);
+  
+  // Pre-filter pressure stat
+  Serial.print("\t");
+  Serial.print(preFilterPressureStats.count());
+  Serial.print("\t");
+  Serial.print(lowPresThreshold);
+  Serial.print("\t");
+  Serial.print(preFilterPressureStats.maximum());
+  Serial.print("\t");
+  Serial.print(preFilterPressureStats.pop_stdev(),4);
+  
   Serial.println();
   
 }  //printDebugFunction()
