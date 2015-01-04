@@ -43,9 +43,10 @@ byte 15:    Checksum
 
  
 Change log
-v1.10 08/17/14  Formatting, changed some #define to const. Added checksum.  Added sendData() function.  Changed packet byte 4 - live level to match 2 minute level
-v1.11 08/26/14  Added test pushbutton and test LED
- 
+08/17/14 v1.10 - Formatting, changed some #define to const. Added checksum.  Added sendData() function.  
+                 Changed packet byte 4 - live level to match 2 minute level
+08/26/14 v1.11 - Added test pushbutton and test LED
+10/06/14 v1.12 - changed sleepWd() to sleepRtc() because it uses less power 
 */
 
 // #define PRINT_DEBUG // comment out to turn off printing
@@ -74,7 +75,7 @@ const byte WATERLEVELSENSOR_PIN =   8; // level sensor is connected to pin D8
 const byte TEST_PUSHBUTTON_PIN =    7; // Momentary pushbutton to test sensor status
 const byte TEST_LED_PIN =           9; // test LED
 
-#define LOW_WATER LOW                  // Sensor input state is LOW when water level is low
+#define LOW_WATER LOW                  // Sensor input state is LOW when water level is low, level switch is closed
 
 //Define the registers that we will be accessing on the MMA8452
 #define MMA8452_ADDRESS 0x1D  // (decimal 29) 0x1D if SA0 is high, 0x1C if low
@@ -186,7 +187,8 @@ void loop()
     }
   }
   
-  panstamp.sleepWd(WDTO_8S);  // Sleep for 8 seconds. millis() doesn't increment while sleeping
+  // panstamp.sleepWd(WDTO_8S);  // Sleep for 8 seconds. millis() doesn't increment while sleeping
+  panstamp.sleepRtc(WDTO_8S);  // uses less power then sleepWd, 1uA vs 5uA
   
 }  // end loop()
 

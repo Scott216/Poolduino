@@ -33,10 +33,11 @@ byte 14:    Checksum
  
  
 Change log
-v1.10 08/17/14  Added checksum. Formatting. Change real time level so 0 = level okay
-v1.11 08/18/14 - changed panStampOk from 0 to 1.  
-v1.12 08/18/14 - Changed I2C_PACKET_LEN from 16 to 15, renamed some constants
-*/
+08/17/14 v1.10 - Added checksum. Formatting. Change real time level so 0 = level okay
+08/18/14 v1.11 - changed panStampOk from 0 to 1.
+08/18/14 v1.12 - Changed I2C_PACKET_LEN from 16 to 15, renamed some constants
+
+ */
 
 // #define PRINT_DEBUG // comment out to turn off serial printing
 
