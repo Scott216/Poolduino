@@ -7,10 +7,8 @@ Arduino Mega
 Xbee Series 1
 
 To Do:
-Delay after you receive an alarm and check again in a couple seconds
-Try uploading to Xively without Xively.h library to see if you can reduce the program size
-Tweet if heater is on and temp > 85
-Limit sensor trouble tweets to 5/day and reset counter at midnight.
+
+ 
  
 SD Card info: 
 Format FAT 16
@@ -45,13 +43,14 @@ v1.62  09/14/14 - Replace Xively failure feed with seconds since last xbee data 
 v1.63  09/14/14 - Added LEDs that are on when Tx to Xively is okay and Rx from Xbee is okay.
 v1.64  09/21/14 - Limit tweet alerts for level sensor trouble to 4
 v1.65  09/25/14 - Forced pump amps to zero if it's below 1/4 amp
- 
+v1.66  05/21/15 - Added sketch version to Tweet message.  Only send volts to Xively if volts > 2000mV, this will stop all the zero volts from getting plotted
+v1.67  06/21/15 - Change low water level Tweet to only send out if water  has been on for more then 40 minutes.  Also sends out how many minutes it's been on so far for the day.
+                  Fixed tweet suffix.  It wasn't properly adding the sketch version. Added Tweet if water temp is >= 85
 */
 
-#define VERSION "v1.65"
+#define VERSION "v1.67"
 #define PRINT_DEBUG     // Comment out to turn off serial printing
 
-#include <SPI.h>             // Communicate with SPI devices http://arduino.cc/en/Reference/SPI
 #include <Ethernet.h>        // LIbrary for Arduino ethernet shield http://arduino.cc/en/Reference/Ethernet
 #include <HttpClient.h>      // http://github.com/amcewen/HttpClient/blob/master/HttpClient.h
 #include <Time.h>            // http://playground.arduino.cc/Code/time
@@ -69,7 +68,7 @@ v1.65  09/25/14 - Forced pump amps to zero if it's below 1/4 amp
 
 // I/O
 const byte SD_CARD_SS =   4;
-const byte SPI_ENABLE  = 53;  // Must be defined as an output for SPI to work properly
+const byte SPI_ENABLE  = 53;  // Must be defined as an output for SPI to work properly, see: http://arduino.cc/en/Reference/SDbegin
 // D10 is reserved for Etherent SS
 
 // Index positions for PoolData[] array
@@ -379,6 +378,7 @@ void checkAlarms()
   static alarmFlag tf_pumpOffInDay;       // Pump is off during the day
   static alarmFlag tf_waterFillOn;        // Water fill valve is on
   static alarmFlag tf_heaterIsOn;         // Heater is on
+  static alarmFlag tf_waterIsHot;         // Water temp is high
   static alarmFlag tf_Xbee_Comm;          // Xbee communication, send alert if no comm
   static alarmFlag tf_cantAddWater;       // Need water, but water fill valve isn't open
   // flags for sensor status.
@@ -556,14 +556,15 @@ void checkAlarms()
   if( PoolData[P_CONTROLLER_STATUS] < SOMETHING_IS_WRONG )
   { tf_emergencyShutdown = NO_ALARM; }
   
-  // Send Tweet if water fill has started
-  if( isWaterFillValveOpen() && tf_waterFillOn != ALARM_2 )
+  // Send Tweet if water fill has started and it's already filled water for 40 minutes or more
+  // The pool seems to need water every day, so I only want a tweet if it needs a lot of water
+  if( isWaterFillValveOpen() && tf_waterFillOn != ALARM_2 && PoolData[P_WATER_FILL_MINUTES] <= 40 )
   {
-    // Wait a couple seconds in case water fill button is pressed a couple times, then read XBee data again    - srg this alarm doesn't seem to be working
+    // Wait a couple seconds in case water fill button is pressed a couple times, then read XBee data again
     delay(2500);
     uint16_t xbeeID;
     ReadXBeeData(&xbeeID);
-    strcpy(msgAlarm, "Water fill started");
+    sprintf(msgAlarm, "Water fill started. So far %d min.", PoolData[P_WATER_FILL_MINUTES] );
     logDataToSdCard(msgAlarm);
     SendTweet(msgAlarm);
     tf_waterFillOn = ALARM_2;  // flag so Tweet is only sent once
@@ -625,6 +626,25 @@ void checkAlarms()
     }
   }
 
+  // Send tweet when water temp is over 85.  Don't want this every time, just once a day, so reset at night
+  if( PoolData[P_TEMP1] >= 85.0 &&  tf_waterIsHot != ALARM_2 )
+  {
+    if( tf_waterIsHot == NO_ALARM )
+    {
+      tf_waterIsHot = ALARM_1;
+      delay(ALARM_DELAY);
+    }
+    else
+    {
+      sprintf(msgAlarm, "Pool water temp is %d", (int)PoolData[P_TEMP1]);
+      logDataToSdCard(msgAlarm);
+      SendTweet(msgAlarm);
+      tf_waterIsHot = ALARM_2;
+    }
+  }
+  
+  
+  
   // Send alert if xbee communication is lost for 10 mintues
   static byte tweetCounterXbee = 0; // don't send more then 4 xbee comm failures per day
   if( (long)(millis() - xbeeLastRxTime) > 600000L  && tf_Xbee_Comm != ALARM_2 && tweetCounterXbee < 3 )
@@ -802,7 +822,7 @@ void checkAlarms()
 
   // check water level sensor
   static byte tweetCounterLevelSensor = 0;
-  if ( !isWaterLevelSensorOk() && tf_waterLevelSensor != ALARM_2 && tweetCounterLevelSensor < 3)
+  if ( !isWaterLevelSensorOk() && tf_waterLevelSensor != ALARM_2 && tweetCounterLevelSensor < 3 )
   {
     if( tf_waterLevelSensor == NO_ALARM )
     {
@@ -835,6 +855,7 @@ void checkAlarms()
     tf_pumpOnAtNight = NO_ALARM;
     tf_pumpOffInDay =  NO_ALARM;
     tf_heaterIsOn =    NO_ALARM;
+    tf_waterIsHot =    NO_ALARM;
     tweetCounterXbee = 0;
     tweetCounterLevelSensor = 0;
     delay(10000); // delay 10 seconds to prevent multiple tweets from going out at 11 PM
@@ -853,21 +874,20 @@ void checkAlarms()
 //=========================================================================================================
 int SendTweet(char * txtTweet)
 {
-  const uint8_t STRLEN_TIMESTAMP = 20; 
-  const uint8_t STRLEN_BITLY = 15;
   
   xively_Upload_Timer = millis() + XIVELY_UPDATE_INTERVAL; // increase timer for Xively so it doesn't send right after Twitter
 
   logDataToSdCard(txtTweet); // update log file
 
-  char cpoolTime[STRLEN_TIMESTAMP + STRLEN_BITLY];   // char arry to hold pool time & bitly URL
-  
-  if(strlen(txtTweet) <= STRLEN_MAX_TWEET - STRLEN_TIMESTAMP - STRLEN_BITLY) // Make sure message there is room in character array for the timestamp & bitly
-  {
-//    sprintf(cpoolTime, " Pool Time: %01d:%02d", int(floor(fpoolTime)), (int)((fpoolTime - floor(fpoolTime)) * 60));
-    sprintf(cpoolTime, " Time: %d:%02d\n bit.ly/1vapvvo", hour(), minute());
-    strcat(txtTweet, cpoolTime);          // Append time to the message
-  }
+  const uint8_t STRLEN_TIMESTAMP = 20;
+  const uint8_t STRLEN_BITLY =     15;
+  const uint8_t STRLEN_VERSION =    8;
+  char tweetSuffix[STRLEN_TIMESTAMP + STRLEN_VERSION + STRLEN_BITLY];   // char array that contains sketch version, pool time & bitly URL
+  sprintf(tweetSuffix, " Time: %d:%02d\n", hour(), minute());
+  strcat(tweetSuffix, VERSION);
+  strcat(tweetSuffix, "\nbit.ly/1vapvvo");
+  if( strlen(txtTweet) <= (STRLEN_MAX_TWEET - strlen(tweetSuffix)) ) // Make sure message there is room in character array for the timestamp, version & bitly URL
+  { strcat(txtTweet, tweetSuffix); }
   
   #ifdef PRINT_DEBUG
     Serial.println(txtTweet);
@@ -958,8 +978,10 @@ bool SendDataToXively()
     
     datastreams[13].setInt((int) PoolData[P_CONTROLLER_STATUS]); // 13 - Controller status code number
     
-    datastreams[14].setInt(PoolData[P_LOW_WATER] ); // 14 - water level sensor
-    datastreams[15].setFloat(PoolData[P_WATER_LVL_BATT]/1000.0); // 15 - battery volts for water level sensor
+    datastreams[14].setInt(PoolData[P_LOW_WATER] );              // 14 - water level sensor
+    
+    if (PoolData[P_WATER_LVL_BATT] > 2000 )
+    { datastreams[15].setFloat(PoolData[P_WATER_LVL_BATT]/1000.0); } // 15 - battery volts for water level sensor
     
   } // end if(gotNewData)
   
