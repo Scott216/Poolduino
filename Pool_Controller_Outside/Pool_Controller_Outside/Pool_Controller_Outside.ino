@@ -1,12 +1,16 @@
 /* 
 Main hardware: Arduino Leonardo, Xbee, RTC and panStamp
-
-GitHub Repo: http://git.io/xzlBSQ
+This sketch run on the Leonardo
  
+GitHub Repo: http://git.io/xzlBSQ
+Xively: https://personal.xively.com/feeds/65673/
+
 To do: 
 Calibrate pressure sensors
 Display errors on OLED
-
+Upgrade to Mega
+Add bluetooth to program wirelessly
+Put g_ prefix on global variables
  
  
 Change log
@@ -32,11 +36,13 @@ Change log
                  of pre-filter pressure in order to better detect oscillations
                  Added enum emergencyStatus_t & poolStatus_t
 09/17/14 v1.59 - Moved I/O pins to be compatible with new PCB
-09/21/14 v1.60 - Added code to support OLED display
- 
+09/21/14 v1.60 - Added code to support OLED display.  Getting low on memory
+05/21/15 v1.61 - Renamed currenlyDisplaying to currentlyDisplaying
+05/28/15 v1.62 - Added reset low pressure alarm at end of the day, converted pressure and temperature array index from #define to enum
+06/15/15 v1.63 - Added code to detect failed pre-filter pressure sensor
 */
 
-#define VERSION "v1.60"
+#define VERSION "v1.63"
 
 #define PRINT_DEBUG   // Comment out if not debugging
 
@@ -48,6 +54,7 @@ Change log
 #include <OneWire.h>           // http://www.pjrc.com/teensy/td_libs_OneWire.html  http://playground.arduino.cc/Learning/OneWire
 #include <DallasTemperature.h> // http://milesburton.com/index.php?title=Dallas_Temperature_Control_Library
 #include "Statistic.h"         // http://playground.arduino.cc/Main/Statistics
+#include <SPI.h>
 #include <Adafruit_GFX.h>      // http://github.com/adafruit/Adafruit-GFX-Library
 #include <Adafruit_SSD1306.h>  // http://github.com/adafruit/Adafruit_SSD1306
 
@@ -78,14 +85,22 @@ Change log
 #define PUMP_INPUT_MAN      13   // From On-Off_Auto switch, On Mode
 
 
-// Array positions
-#define PRE_HEAT_TEMP        0   // Pre-heater temperature array
-#define POST_HEAT_TEMP       1   // Post-heater temperature array 
-#define PUMP_TEMP            2   // Pump temperature array
-#define PRE_FILTER_PRESSURE  0   // Pre-filter water pressure array
-#define POST_FILTER_PRESSURE 1   // Post-filter water pressure array
-#define WATER_FILL_PRESSURE  2   // Water fill pressure array
+enum index_temperature_t {
+  PRE_HEAT_TEMP,       // Pre-heater temperature array
+  POST_HEAT_TEMP,      // Post-heater temperature array
+  PUMP_TEMP,           // Pump temperature array
+  ARRAY_TEMP_NUM_POSIT // Number of positions in temperature array
+};
+float temperature[ARRAY_TEMP_NUM_POSIT];
 
+enum index_pressure_t
+{
+  PRE_FILTER_PRESSURE,   // Pre-filter water pressure array
+  POST_FILTER_PRESSURE,  // Post-filter water pressure array
+  WATER_FILL_PRESSURE,   // Water fill pressure array
+  ARRAY_PRES_NUM_POSIT   // Number of positions in pressure array
+};
+float pressure[ARRAY_PRES_NUM_POSIT];
 
 #define PUMP_SWITCH_ON   LOW   // Pump switch is ON when input is LOW, otherwise it's high from the pull-up resistor
 
@@ -99,9 +114,9 @@ const uint32_t WATER_FILL_15_MIN =     908000;  // 15 minutes added to water fil
 const byte     WATER_FILL_PRESS_THRESH =   20;  // If water fill pressure is > then thershold, you can assume garden hose is connected to water fill
 const byte     PRESSURE_TRANSDUCER_TYPE = 100;  // Can use either 100 PSI sensor or 30 PSI sensor
                                                 // With 0-30PSI transducer, analog input = 1023 at with valve off, 290 with valve open, 190 with hose diconnected
-const byte MAX_WATER_FILL_MINUTES =       90;   // Maximum number of minutes water can be added each day.  Reset at 11 PM. Refactored some of the comples if() statements
-const byte PANSTAMP_ONLINE =               1;   // panStamp status, 0 = online, 255 = offline
-const uint32_t SAMPLE_TIME =           10000;   // Sample time for pre-filter pressure - used in statisic library
+const byte MAX_WATER_FILL_MINUTES =        90;  // Maximum number of minutes water can be added each day.  Reset at 11 PM. Refactored some of the comples if() statements
+const byte PANSTAMP_ONLINE =                1;  // panStamp status, 0 = online, 255 = offline
+const uint32_t SAMPLE_TIME =            10000;  // Sample time for pre-filter pressure - used in statisic library
 
 // Status code to send to inside Arduino
 // Indicated current state of poolc controller
@@ -111,8 +126,8 @@ enum poolStatus_t
   STATUS_PUMP_ON,
   STATUS_PUMP_SWITCH_OFF,
   STATUS_ADDING_WATER,
-  STATUS_EMERGENCY_LOW_PRESS_FLUCT,  // low pressure because of fluctuations  srgg
-  STATUS_EMERGENCY_LOW_PRESS_COUNT,  // continious low pressure for 5 mintutes
+  STATUS_EMERGENCY_LOW_PRESS_FLUCT,  // low pressure because of fluctuations
+  STATUS_EMERGENCY_LOW_PRESS_COUNT,  // continuous low pressure for 5 minutes
   STATUS_EMERGENCY_HI_AMPS,
   STATUS_EMERGENCY_HI_PUMP_TEMP
 };
@@ -128,7 +143,7 @@ RTC_DS1307 RTC;
 
 Adafruit_SSD1306 display(OLED_RESET);
 
-// statistics for prefilter pressure
+// Statistics for prefilter pressure
 Statistic preFilterPressureStats;
 
 const byte ADDR_SLAVE_I2C =  21;  // I2C Slave address of RX panStamp
@@ -168,8 +183,6 @@ Button btnWaterFill = Button(WATER_FILL_PB, LOW);
 byte sensorStatusByte;           // Each bit determines if sensor is operating properly
 byte ioStatusByte;               // I/O state of digital I/O
 int16_t xbeeData[NUM_DATA_PTS];  // Array to hold integers that will be sent to other xbee
-float temperature[3];            // Pre-heater temp (0), Post-Heter temp (1), pump temp (2)
-float pressure[3];               // Pre-filter pressure (0), Post-filter pressure (1), water fill pressure (2)
 float PumpAmps = 0;              // Amps going to pump
 float poolTime;                  // Time from Real Time Clock convted to decimal
 uint8_t waterAddedToday = 0;     // minutes of water added today
@@ -266,8 +279,8 @@ void loop()
   static uint32_t lowPressTimer;        // Times how long the pressure is low, used to shutdown pump if there is a problem
   static uint32_t statsSampleTimer = 0; // Timer for pre-filter pressure sampling
   static uint32_t displayTimer = 0;     // displays each screen for a few seconds
-  static bool isLowPressTimerRunning;   // Flag for low pressure timer, true if low pressure timer has started
-  static float lowPreFilterPressureThreshold = 15; // Pressure setting used to count pressure fluctuations when pump is starved for water.  Threshold is adjusted by max operating pressure.
+  static bool     isLowPressTimerRunning;   // Flag for low pressure timer, true if low pressure timer has started
+  static float    lowPreFilterPressureThreshold = 15; // Pressure setting used to count pressure fluctuations when pump is starved for water.  Threshold is adjusted by max operating pressure.
   
   
   // Get Time from RTC every 15 seconds
@@ -473,7 +486,7 @@ void loop()
 
     // Read pressure sensors and use low pass filter to smooth
     float newPressure;
-    newPressure = 0.0343 * (float) analogRead(PRESSURE1_PIN) - 5.9077;  // srg: 12.5 psi = 500 ADC, 0 PSI = 193 ADC, calc seems to be about 1.5 PSI Low
+    newPressure = 0.0343 * (float) analogRead(PRESSURE1_PIN) - 5.9077;  // 12.5 psi = 500 ADC, 0 PSI = 193 ADC, calc seems to be about 1.5 PSI Low
     if (newPressure < 0.7)  // if pressure is near zero, set to zero
     { newPressure = 0.0; }
     
@@ -526,11 +539,14 @@ void loop()
     { sensorStatusByte |= 1 << 2; }  // valid temp range
     
     // Pre filter pressure
-    // If pump is on and pressure2 is okay (>5), but higher then pressure1, then there is a problem with presssure1 (pre-filter)
+    // If pump is on and post-filter pressure is okay (>5), but higher then pre-filter pressure, then there is a problem with pre-filter
     if (digitalRead(PUMP_OUTPUT) == HIGH && pressure[POST_FILTER_PRESSURE] > 5 && pressure[POST_FILTER_PRESSURE] > pressure[PRE_FILTER_PRESSURE])
     { sensorStatusByte  &= ~(1 << 3); }  // Invalid pre-filter pressure
+    // If pump is off, but pre-filter pressure is still high, then pressure sensor might have gone bad
+    else if ( digitalRead(PUMP_OUTPUT) == LOW  && pressure[POST_FILTER_PRESSURE] > 25 && PumpAmps < 2 )
+    { sensorStatusByte  &= ~(1 << 3); }  // Bad sensor
     else
-    { sensorStatusByte |= 1 << 3; }  // valid pre-filter pressure range
+    { sensorStatusByte |= 1 << 3; }  // pre-filter pressure okay
     
     // see if sensor is working, ADC value should never be below about 200
     if (analogRead(PRESSURE1_PIN) < 100 )
@@ -538,7 +554,7 @@ void loop()
 
     // Post filter pressure
     // If pump is on and pre-filter pressure is okay, but post filter pressure is low, then there is problem with sensor
-    // Note - when discharging water to waste, this will cause pressure2 to show an problem
+    // Note - when discharging water to waste, this will cause post-filter pressure to show a problem
     if (digitalRead(PUMP_OUTPUT) == HIGH && pressure[PRE_FILTER_PRESSURE] > 10 && pressure[POST_FILTER_PRESSURE] < 4)
     { sensorStatusByte  &= ~(1 << 4); }  // Invalid pressure
     else
@@ -573,7 +589,7 @@ void loop()
   {
     TX_Timer = millis() + TX_INTERVAL;  // every 2 secoonds
     sendXbeeData();   // Transmit data to inside Xbee
-    printDebugFunction(isLowPressTimerRunning, lowPreFilterPressureThreshold); // srg - use to debug sketch
+    printDebugFunction(isLowPressTimerRunning, lowPreFilterPressureThreshold); // use to debug sketch
   }
 
   // Update OLED display
@@ -588,7 +604,19 @@ void loop()
   {
     waterAddedToday =  0;
     presFluctCounter = 0;
+    if ( poolStatus == STATUS_EMERGENCY_LOW_PRESS_COUNT )  // reset low pressure alarm
+    {
+      if ( pumpSwitchAutoMode )
+      { poolStatus = STATUS_PUMP_OFF; }
+      else if ( pumpSwitchManualMode )
+      { poolStatus = STATUS_PUMP_ON; }
+      EmergencyShutdown = EVERYTHING_OK;
+      presFluctCounter = 0;
+      presFluctResetFlag = false;
+      isLowPressTimerRunning = false;  // set flag so this lowPressTimer isn't updated again
+    }
   }
+  
   
 } // loop()
 
@@ -707,6 +735,7 @@ bool sendXbeeData()
   return false;
 } // sendXbeeData()
 
+
 //============================================================================
 // I2C Request data from panStamp slave
 //============================================================================
@@ -749,9 +778,9 @@ bool getI2CData()
       // water level detector Tx is online
       lowWaterLevel = (waterLevel_t) i2CData[2];   // Tx sets water as low level if it's continiously low for 2 minutes
       if( lowWaterLevel == LEVEL_SENSOR_OFFLINE )
-      { sensorStatusByte  &= ~(1 << 7); } // water level offline
+      { sensorStatusByte  &= ~(1 << 7); } // water level sensor is offline
       else
-      { sensorStatusByte |= 1 << 7; }  // set water level sensor bit to indicate sensor is online
+      { sensorStatusByte |= 1 << 7; }     // water level sensor is online
         
       // set ioStatusbyte bit for real time water level
       // 0 = water okay, 1 = low water
@@ -780,15 +809,15 @@ bool getI2CData()
 } // end getI2CData()
 
 
-// rotate through the different screens
+// Rotate through the different screens
 void updateDisplay()
 {
  
- static byte currenlyDisplaying = 0; // keeps track of what is now displayed on the OLED and rotates through screens
+ static byte currentlyDisplaying = 0; // keeps track of what is now displayed on the OLED and rotates through screens
  display.clearDisplay();  
  display.setCursor(0,0);
 
- switch (currenlyDisplaying)
+ switch (currentlyDisplaying)
  {
    case 0:  // Display Temperature
      display.print(F("Pre-heat temp  "));
@@ -797,7 +826,7 @@ void updateDisplay()
      display.println((int)temperature[POST_HEAT_TEMP]);
      display.print(F("Pump temp     "));
      display.print((int)temperature[PRE_HEAT_TEMP]);
-     currenlyDisplaying = 1; 
+     currentlyDisplaying = 1; 
      break;
 
    case 1: // Display pressure
@@ -810,7 +839,7 @@ void updateDisplay()
      display.print(F("Water fill "));
      display.print(pressure[WATER_FILL_PRESSURE],1);
      display.print(" PSI");
-     currenlyDisplaying = 2;
+     currentlyDisplaying = 2;
      break;
   case 2: // display level sensor data
      display.print(F("Water level "));
@@ -835,14 +864,14 @@ void updateDisplay()
      display.print(F("Battery "));
      display.print(levelSensorMilliVolts);
      display.println(F(" mV"));
-     currenlyDisplaying = 3;
+     currentlyDisplaying = 3;
      break;
 
    case 3:  // display water fill minutes today
      display.print(F("Water added ")); 
      display.print(waterAddedToday);
      display.println(F(" min"));
-     currenlyDisplaying = 0;
+     currentlyDisplaying = 0;
      break;   
  } // end switch
  
@@ -867,6 +896,7 @@ bool isNewMinute()
   }
   
 } // isNewMinute()
+
 
 // Return true if it's a new minutes
 bool isNewDay()
@@ -899,7 +929,7 @@ void printDebugFunction(bool lowPressTmr, float lowPresThreshold)
   Serial.print("\t");
   Serial.print(isLidLevel);
   Serial.print("\t");
-  Serial.print(pressure[POST_HEAT_TEMP]);
+  Serial.print(temperature[POST_HEAT_TEMP]);
   Serial.print("\t");
   Serial.print(pressure[WATER_FILL_PRESSURE]);
   Serial.print("\t");
@@ -907,7 +937,7 @@ void printDebugFunction(bool lowPressTmr, float lowPresThreshold)
   Serial.print("\t");
   Serial.print(lowPressTmr);
   Serial.print("\t");
-  Serial.print(pressure[POST_FILTER_PRESSURE]);
+  Serial.print(pressure[POST_FILTER_PRESSURE]); 
   Serial.print("\t");
   Serial.print(poolStatus);
   Serial.print("\t");
