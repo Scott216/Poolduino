@@ -46,9 +46,10 @@ v1.65  09/25/14 - Forced pump amps to zero if it's below 1/4 amp
 v1.66  05/21/15 - Added sketch version to Tweet message.  Only send volts to Xively if volts > 2000mV, this will stop all the zero volts from getting plotted
 v1.67  06/21/15 - Change low water level Tweet to only send out if water  has been on for more then 40 minutes.  Also sends out how many minutes it's been on so far for the day.
                   Fixed tweet suffix.  It wasn't properly adding the sketch version. Added Tweet if water temp is >= 85
+v1.68  07/05/15 - Changed NTP time server
 */
 
-#define VERSION "v1.67"
+#define VERSION "v1.68"
 #define PRINT_DEBUG     // Comment out to turn off serial printing
 
 #include <Ethernet.h>        // LIbrary for Arduino ethernet shield http://arduino.cc/en/Reference/Ethernet
@@ -152,7 +153,8 @@ uint8_t failures =  0;    // Xively upload failures
 
 
 // NPT Time setup
-IPAddress timeServer(132, 163, 4, 101); // time-a.timefreq.bldrdoc.gov
+// http://tf.nist.gov/tf-cgi/servers.cgi
+IPAddress timeServer(129, 6, 15, 28); 
 const int timeZone = -4;  // Eastern Standard Time (USA)
 EthernetUDP Udp;
 const int NTP_PACKET_SIZE = 48;     // NTP time is in the first 48 bytes of message
