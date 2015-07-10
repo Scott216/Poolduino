@@ -47,9 +47,11 @@ v1.66  05/21/15 - Added sketch version to Tweet message.  Only send volts to Xiv
 v1.67  06/21/15 - Change low water level Tweet to only send out if water  has been on for more then 40 minutes.  Also sends out how many minutes it's been on so far for the day.
                   Fixed tweet suffix.  It wasn't properly adding the sketch version. Added Tweet if water temp is >= 85
 v1.68  07/05/15 - Changed NTP time server
+v1.69  07/06/15 - Cast float to int for water minute tweets 
+v1.70  07/08/15 - Fixed water fill alert so it only sends text if it's over 40 minutes.  I mistakenly had it less then 40 min
 */
 
-#define VERSION "v1.68"
+#define VERSION "v1.70"
 #define PRINT_DEBUG     // Comment out to turn off serial printing
 
 #include <Ethernet.h>        // LIbrary for Arduino ethernet shield http://arduino.cc/en/Reference/Ethernet
@@ -154,7 +156,8 @@ uint8_t failures =  0;    // Xively upload failures
 
 // NPT Time setup
 // http://tf.nist.gov/tf-cgi/servers.cgi
-IPAddress timeServer(129, 6, 15, 28); 
+// IPAddress timeServer(129, 6, 15, 29); 
+IPAddress timeServer(64,113,32,5);
 const int timeZone = -4;  // Eastern Standard Time (USA)
 EthernetUDP Udp;
 const int NTP_PACKET_SIZE = 48;     // NTP time is in the first 48 bytes of message
@@ -254,7 +257,9 @@ void setup(void)
   if ( getNtpTime() == 0 )
   {
     // Couldn't get time from UDP Server, try one more tiem
-    delay(500);
+    delay(2000);
+    getNtpTime();
+    delay(2000);
     getNtpTime();
   }
   //  setTime(hour(t),minute(t),second(t),month(t),day(t),year(t));
@@ -267,9 +272,9 @@ void setup(void)
   // Initialize SD Card
   if ( SD.begin(chipSelect) )
   #ifdef PRINT_DEBUG
-    { Serial.println(F("card initialized")); }
+    { Serial.println(F("SD card initialized")); }
     else
-    { Serial.println(F("Card failed, or not present")); }
+    { Serial.println(F("SD Card failed, or not present")); }
   #endif
   
   // Initialize global variables
@@ -560,13 +565,13 @@ void checkAlarms()
   
   // Send Tweet if water fill has started and it's already filled water for 40 minutes or more
   // The pool seems to need water every day, so I only want a tweet if it needs a lot of water
-  if( isWaterFillValveOpen() && tf_waterFillOn != ALARM_2 && PoolData[P_WATER_FILL_MINUTES] <= 40 )
+  if( isWaterFillValveOpen() && tf_waterFillOn != ALARM_2 && PoolData[P_WATER_FILL_MINUTES] >= 40.0 )
   {
     // Wait a couple seconds in case water fill button is pressed a couple times, then read XBee data again
     delay(2500);
     uint16_t xbeeID;
     ReadXBeeData(&xbeeID);
-    sprintf(msgAlarm, "Water fill started. So far %d min.", PoolData[P_WATER_FILL_MINUTES] );
+    sprintf(msgAlarm, "Water fill started. So far %d min.", (int) PoolData[P_WATER_FILL_MINUTES] );
     logDataToSdCard(msgAlarm);
     SendTweet(msgAlarm);
     tf_waterFillOn = ALARM_2;  // flag so Tweet is only sent once
@@ -1407,7 +1412,7 @@ time_t getNtpTime()
   while (millis() - beginWait < 1500) {
     int size = Udp.parsePacket();
     if (size >= NTP_PACKET_SIZE) {
-      Serial.println(F("Receive NTP Response"));
+      Serial.println(F("Received NTP Response"));
       Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
       unsigned long secsSince1900;
       // convert four bytes starting at location 40 to a long integer
