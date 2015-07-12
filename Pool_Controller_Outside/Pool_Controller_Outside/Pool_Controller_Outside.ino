@@ -36,7 +36,7 @@ Change log
                  of pre-filter pressure in order to better detect oscillations
                  Added enum emergencyStatus_t & poolStatus_t
 09/17/14 v1.59 - Moved I/O pins to be compatible with new PCB
-09/21/14 v1.60 - Added code to support OLED display.  Getting low on memory
+09/21/14 v1.60 - Added code to support OLED display.  Getting low on memory, should probably upgrade to Arduino Mega
 05/21/15 v1.61 - Renamed currenlyDisplaying to currentlyDisplaying
 05/28/15 v1.62 - Added reset low pressure alarm at end of the day, converted pressure and temperature array index from #define to enum
 06/15/15 v1.63 - Added code to detect failed pre-filter pressure sensor
