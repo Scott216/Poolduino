@@ -7,8 +7,12 @@ Arduino Mega
 Xbee Series 1
 
 To Do:
-
- 
+Change time so it's EST
+I get a needs water alert if water filling after 15 minutes is not enough.  Change this so I only get alert if it needs water and can't deliver.
+  I think this is sending the alert in the short period of time where it finished the 1st 15 minutes, but hasn't started the 2nd
+If Xbee is offline, data for all streams still gets sent to Xively.  To resolve this, I think I need to use a different library.  Could get rid of library
+ and do it the way it's done in this Adafruit exampele: http://git.io/vmCST
+ I think xbee communication is affected by humidity
  
 SD Card info: 
 Format FAT 16
@@ -50,10 +54,12 @@ v1.68  07/05/15 - Changed NTP time server
 v1.69  07/06/15 - Cast float to int for water minute tweets 
 v1.70  07/08/15 - Fixed water fill alert so it only sends text if it's over 40 minutes.  I mistakenly had it less then 40 min
 v1.71  07/11/15 - Changed NTP to use Time_NTP.h library I made.  Added 30 minute delay to Water Level sensor trouble alert.  Added g_ prefix to global variables
+v1.72  07/15/15 - Fixed Xbee alert - it should go out after 10 minutes without xbee communication, but it was really set for 1 minute.
+v1.73  07/26/15 - Added adjustment for EST time
  
 */
 
-#define VERSION "v1.71"
+#define VERSION "v1.73"
 #define PRINT_DEBUG     // Comment out to turn off serial printing
 
 #include <Ethernet.h>        // Library for Arduino ethernet shield http://arduino.cc/en/Reference/Ethernet
@@ -66,7 +72,7 @@ v1.71  07/11/15 - Changed NTP to use Time_NTP.h library I made.  Added 30 minute
 #include "XBee.h"            // http://code.google.com/p/xbee-arduino/
 #include "Tokens.h"          // Tokens for Xively and twitter
 #include "Pool_Controller_Inside_Library.h"    // Include application, user and local libraries
-#include "Time_NTP.h"
+#include "Time_NTP.h"        // My Time library
 
 // This gets rid of compiler warning:  Only initialized variables can be placed into program memory area
 #undef PROGMEM
@@ -163,11 +169,12 @@ XBeeResponse response = XBeeResponse();
 // create reusable response objects for responses we expect to handle
 Rx16Response rx16 = Rx16Response();
 
-bool g_gotNewData = false;        // Flag to indicate that sketch has received new data from xbee
-uint32_t g_xbeeLastRxTime;       // Last time data was received from xbee
-bool g_xBeeTimeoutFlag = false;  // Flag to indicate no data from Xbee, used to keep warning from going off every 5 minutes
-int8_t g_xbeeSignal;             // xbee RSSI Signal strength
-uint8_t g_xbeeRetries; 
+bool     g_gotNewData =      false;  // Flag to indicate that sketch has received new data from xbee
+uint32_t g_xbeeLastRxTime =      0;  // Last time data was received from xbee
+bool     g_xBeeTimeoutFlag = false;  // Flag to indicate no data from Xbee, used to keep warning from going off every 5 minutes
+int8_t   g_xbeeSignal =          0;  // xbee RSSI Signal strength
+uint8_t  g_xbeeRetries =         0;
+
 const int CHIPSELECT = 4;  // Micro SD Card
 
 // Twitter setup
@@ -188,9 +195,6 @@ void checkAlarms();
 int SendTweet(char msgTweet[]);
 int freeRam(bool PrintRam);
 void controllerStatus(char * txtStatus, int poolstatus);
-void sendNTPpacket(IPAddress &address);
-time_t getNtpTime();
-
 bool isPreFltrPressSensorOk();
 bool isPostFltrPressSensorOk();
 bool isWaterFillPressSensorOk();
@@ -241,7 +245,8 @@ void setup(void)
   }
   
   // Setup NTP time
-  setSyncProvider(getNewNtpTime);
+  const uint32_t EST_TIME_ADJUST = -14400000;
+  setSyncProvider(getNewNtpTime + EST_TIME_ADJUST);
   
   //  Print the time
   #ifdef PRINT_DEBUG
@@ -281,7 +286,7 @@ void loop(void)
   static bool gotFistXbeeData = false;  // Needed at reboot to prevent false alarms for sensor status.  Set to true after first good xbee transmit 
   
   // Read XBee data
-  // Keep tying to read data until successful.  After 30 tries, give up and move on
+  // Try up to 30 times to read xbee data, after that give up and move on
   bool xbeeStat;
   byte xbeeFailCnt = 0;
   do
@@ -635,7 +640,7 @@ void checkAlarms()
   
   // Send alert if xbee communication is lost for 10 mintues
   static byte tweetCounterXbee = 0; // don't send more then 4 xbee comm failures per day
-  if( (long)(millis() - g_xbeeLastRxTime) > 600000L  && tf_Xbee_Comm != ALARM_2 && tweetCounterXbee < 3 )
+  if( (long)(millis() - g_xbeeLastRxTime) > 6000000L  && tf_Xbee_Comm != ALARM_2 && tweetCounterXbee < 3 )
   {
     if( tf_Xbee_Comm == NO_ALARM )
     {
@@ -985,7 +990,7 @@ bool SendDataToXively()
     datastreams[10].setBuffer(txtStatus);                           // 10 - Controller status - sends text to Xively, not numbers
   }
   
-  datastreams[11].setInt(g_successes); // 11 - network successes
+  datastreams[11].setInt(g_successes);                             // 11 - network successes
   datastreams[12].setInt( (millis() - g_xbeeLastRxTime) / 1000 );  // 12 - seconds since last xbee data received
   
   // Send data to Xively
@@ -993,6 +998,7 @@ bool SendDataToXively()
     Serial.println(F("\n\nSend to Xively"));
   #endif
   
+  // push data to xively then print out status
   int ret = xivelyclient.put(feed, XIVELY_API_KEY);
   switch (ret)
   {
@@ -1152,7 +1158,6 @@ bool logDataToSdCard(char * txtComment)
     newFile.println();
     newFile.close();
   }
-
 
 
   // open the file. note that only one file can be open at a time,
@@ -1382,6 +1387,7 @@ int freeRam(bool PrintRam)
 
 
 // SRG - Move these to the class library
+
 bool isPreFltrPressSensorOk()
 {
   return ((g_sensorStatusByte >> 3) & 1);
