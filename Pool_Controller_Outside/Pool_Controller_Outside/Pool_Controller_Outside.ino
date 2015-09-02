@@ -11,7 +11,7 @@ Display errors on OLED
 Upgrade to Mega
 Add bluetooth to program wirelessly
 Put g_ prefix on global variables
- 
+Try to detect when level sensor is stuck
  
 Change log
 07/01/14 v1.50 - Added delay in pump off to stop false positives for pump amp sensor status. Changed xbee.begin(9600); 
@@ -40,11 +40,16 @@ Change log
 05/21/15 v1.61 - Renamed currenlyDisplaying to currentlyDisplaying
 05/28/15 v1.62 - Added reset low pressure alarm at end of the day, converted pressure and temperature array index from #define to enum
 06/15/15 v1.63 - Added code to detect failed pre-filter pressure sensor
+09/01/15 v1.64 - Put ifdef ENABLE_OLED around OLED code to save memore. Memory too low on Leonardo.
+                 Have problem where 5 min low pressure alarm would sometimes come on after I shut off pump when changing backpack, I hope the two changes below fix this 
+                 1) Changed isLowPressTimerRunning trigger so it resets if it's 2 PSI above threshold, was 3 PSI.
+                 2) Added preFilterPressureStats.clear() when pump is turned off
 */
 
-#define VERSION "v1.63"
+#define VERSION "v1.64"
 
 #define PRINT_DEBUG   // Comment out if not debugging
+// #defing ENABLE_OLED   // Not enought memory on Leonardo, you can uncomment if you use a bigger Arduino
 
 #include "Pool_Controller_Outside_Library.h"
 #include <Wire.h>              // http://www.arduino.cc/en/Reference/Wire
@@ -55,8 +60,10 @@ Change log
 #include <DallasTemperature.h> // http://milesburton.com/index.php?title=Dallas_Temperature_Control_Library
 #include "Statistic.h"         // http://playground.arduino.cc/Main/Statistics
 #include <SPI.h>
-#include <Adafruit_GFX.h>      // http://github.com/adafruit/Adafruit-GFX-Library
-#include <Adafruit_SSD1306.h>  // http://github.com/adafruit/Adafruit_SSD1306
+#ifdef ENABLE_OLED
+  #include <Adafruit_GFX.h>      // http://github.com/adafruit/Adafruit-GFX-Library
+  #include <Adafruit_SSD1306.h>  // http://github.com/adafruit/Adafruit_SSD1306
+#endif
 
 // This gets rid of compiler warning:  Only initialized variables can be placed into program memory area
 #undef PROGMEM
@@ -141,7 +148,9 @@ bool isLidLevel = false; // Level sensor lid, flat = true
 // Initialize Real Time Clock
 RTC_DS1307 RTC;
 
-Adafruit_SSD1306 display(OLED_RESET);
+#ifdef ENABLE_OLED
+  Adafruit_SSD1306 display(OLED_RESET);
+#endif
 
 // Statistics for prefilter pressure
 Statistic preFilterPressureStats;
@@ -206,7 +215,8 @@ void setup()
   Serial.begin(9600);
   Serial1.begin(9600);    // for Leonardo, need to use Serial1, not Serial
   xbee.setSerial(Serial1);
-  
+delay(4000);//srgg
+
   pinMode(PUMP_OUTPUT,       OUTPUT);
   pinMode(WATER_FILL_PB_LED, OUTPUT);
   pinMode(WATER_OUTPUT,      OUTPUT);
@@ -248,6 +258,7 @@ void setup()
   
   preFilterPressureStats.clear(); // Clear statistic stats
 
+#ifdef ENABLE_OLED
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3C (for the 128x32)
 
   display.clearDisplay();  
@@ -258,7 +269,8 @@ void setup()
   display.println(F("Version "));
   display.println(VERSION);
   display.display();
-  
+#endif
+
 #ifdef PRINT_DEBUG
   Serial.print(F("Finished setup() "));
   Serial.println(VERSION);
@@ -278,7 +290,9 @@ void loop()
   static uint32_t waterFillResetTime;   // Used to time how long the water fill pushbutton is held.  If over 2 seconds, then reset water fill
   static uint32_t lowPressTimer;        // Times how long the pressure is low, used to shutdown pump if there is a problem
   static uint32_t statsSampleTimer = 0; // Timer for pre-filter pressure sampling
+#ifdef ENABLE_OLED
   static uint32_t displayTimer = 0;     // displays each screen for a few seconds
+#endif
   static bool     isLowPressTimerRunning;   // Flag for low pressure timer, true if low pressure timer has started
   static float    lowPreFilterPressureThreshold = 15; // Pressure setting used to count pressure fluctuations when pump is starved for water.  Threshold is adjusted by max operating pressure.
   
@@ -355,7 +369,7 @@ void loop()
     
     preFilterPressureStats.add(pressure[PRE_FILTER_PRESSURE]);
     
-    // If there are over 10 samples and pressure is in a normal range
+    // If there are over 7 samples and pressure is in a normal range
     // Then set the nominal pre-filter pressure
     if ( preFilterPressureStats.count() >= 8 && pressure[PRE_FILTER_PRESSURE] > 14.0 )
     { lowPreFilterPressureThreshold = preFilterPressureStats.maximum() - 3.0; }
@@ -395,7 +409,7 @@ void loop()
   if( pressure[PRE_FILTER_PRESSURE] < 11 &&
      digitalRead(PUMP_OUTPUT) == HIGH &&
      digitalRead(PUMP_INPUT_AUTO) == PUMP_SWITCH_ON &&
-     isLowPressTimerRunning == false ) // && startupLowPressFlag == false )
+     isLowPressTimerRunning == false ) 
   {
     lowPressTimer = millis() +  300000UL;  // start low pressure timer for 5 minutes (300k mS)
     isLowPressTimerRunning = true;  // set flag so this lowPressTimer isn't updated again
@@ -403,7 +417,7 @@ void loop()
   }
 
   // If pressure returns to normal or pump is off, reset low pressure timer flag
-  if( pressure[PRE_FILTER_PRESSURE] > (lowPreFilterPressureThreshold + 3.0) || digitalRead(PUMP_OUTPUT) == LOW )
+  if( pressure[PRE_FILTER_PRESSURE] > (lowPreFilterPressureThreshold + 2.0) || digitalRead(PUMP_OUTPUT) == LOW )
   { isLowPressTimerRunning = false; }
   
   // Shutdown pump if amps are too high
@@ -432,7 +446,7 @@ void loop()
     poolStatus = STATUS_EMERGENCY_LOW_PRESS_FLUCT;
   }
   
-  // If pressure has been low for 5 minutes straight, shut down pump
+  // If pressure has been low for 5 minutes straight, set alarm status so shutdown pump  srgg
   if( (long)(millis() - lowPressTimer) > 0 && isLowPressTimerRunning && EmergencyShutdown == EVERYTHING_OK )
   {
     EmergencyShutdown = LOW_PRESSURE;
@@ -470,6 +484,8 @@ void loop()
     EmergencyShutdown = EVERYTHING_OK;
     presFluctCounter = 0;  // Reset low pressure counter; counter won't count up when water fill valve is on
     presFluctResetFlag = false;  // set to false so counter has chance to start again. If pressure never gets above 15, it won't reset
+    preFilterPressureStats.clear();  // clear pre-filter pressure stats
+    lowPreFilterPressureThreshold = 15;  // set default threshold
   }
   
   // Read Sensors
@@ -592,13 +608,15 @@ void loop()
     printDebugFunction(isLowPressTimerRunning, lowPreFilterPressureThreshold); // use to debug sketch
   }
 
+#ifdef ENABLE_OLED
   // Update OLED display
   if ( (long)(millis() - displayTimer) > 0 )
   {
     updateDisplay();
     displayTimer = millis() + 5000; 
   }
-  
+#endif
+
   // Reset minutes of water added today counter and low pressure counter at midnight
   if ( isNewDay() )
   {
@@ -616,7 +634,6 @@ void loop()
       isLowPressTimerRunning = false;  // set flag so this lowPressTimer isn't updated again
     }
   }
-  
   
 } // loop()
 
@@ -808,8 +825,10 @@ bool getI2CData()
   
 } // end getI2CData()
 
-
+#ifdef ENABLE_OLED
+//============================================================================
 // Rotate through the different screens
+//============================================================================
 void updateDisplay()
 {
  
@@ -878,9 +897,11 @@ void updateDisplay()
  display.display();
 
 } // end updateDisplay()
+#endif
 
-
+//============================================================================
 // Return true if it's a new minutes
+//============================================================================
 bool isNewMinute()
 {
   DateTime now = RTC.now();  // Gets the current time
@@ -898,7 +919,9 @@ bool isNewMinute()
 } // isNewMinute()
 
 
+//============================================================================
 // Return true if it's a new minutes
+//============================================================================
 bool isNewDay()
 {
   DateTime now = RTC.now();  // Gets the current time
@@ -915,10 +938,22 @@ bool isNewDay()
   
 } // isNewDay()
 
-
+//============================================================================
+// Prints out lots of pool info
+// status byte, IO byte, low water, Lid level, Heat2, Fill Pres, P1, Low P tmr, P2, stat, ver, press count, pres threshold, pres max, pres stdev
+//============================================================================
 void printDebugFunction(bool lowPressTmr, float lowPresThreshold)
 {
-
+  static byte print_header = 20;
+  
+  if ( print_header < 20 )
+  { print_header++; }
+  else
+  {
+   Serial.println(F("stat\t\tIO\t\tlow H20\tlid\tHeat2\tFill\tP1\tPresTmr\tP2\tstatus\tver\t\samples\tthresh\tp-max\tstdev"));
+   print_header = 0; 
+  }
+  
   for (int j = 7; j >= 0; j--)
   { Serial.print(bitRead(sensorStatusByte, j)); } // prints leading zeros in binary number
   Serial.print("\t");
@@ -939,19 +974,19 @@ void printDebugFunction(bool lowPressTmr, float lowPresThreshold)
   Serial.print("\t");
   Serial.print(pressure[POST_FILTER_PRESSURE]); 
   Serial.print("\t");
-  Serial.print(poolStatus);
+  Serial.print(poolStatus);  // Pool statis ID
   Serial.print("\t");
-  Serial.print(VERSION);
+  Serial.print(VERSION);  // sketch version
   
   // Pre-filter pressure stat
   Serial.print("\t");
-  Serial.print(preFilterPressureStats.count());
+  Serial.print(preFilterPressureStats.count());  // sample count
   Serial.print("\t");
-  Serial.print(lowPresThreshold);
+  Serial.print(lowPresThreshold);  // Used to count pressure fluctuations.  It's set to 3PSI below max avg pressure
   Serial.print("\t");
-  Serial.print(preFilterPressureStats.maximum());
+  Serial.print(preFilterPressureStats.maximum());  // Max pressure, resets every 30 minutes
   Serial.print("\t");
-  Serial.print(preFilterPressureStats.pop_stdev(),4);
+  Serial.print(preFilterPressureStats.pop_stdev(),4);  // standard deviation of pre filter pressure
   
   Serial.println();
   
