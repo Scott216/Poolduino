@@ -44,9 +44,10 @@ Change log
                  Have problem where 5 min low pressure alarm would sometimes come on after I shut off pump when changing backpack, I hope the two changes below fix this 
                  1) Changed isLowPressTimerRunning trigger so it resets if it's 2 PSI above threshold, was 3 PSI.
                  2) Added preFilterPressureStats.clear() when pump is turned off
+06/14/16 v1.65   Added time printout in setup()
 */
 
-#define VERSION "v1.64"
+#define VERSION "v1.65"
 
 #define PRINT_DEBUG   // Comment out if not debugging
 // #defing ENABLE_OLED   // Not enought memory on Leonardo, you can uncomment if you use a bigger Arduino
@@ -238,6 +239,14 @@ delay(4000);//srgg
   #ifdef PRINT_DEBUG
     if (! RTC.isrunning())
      { Serial.println(F("RTC is NOT running!")); }
+     else
+     { 
+       DateTime now = RTC.now();  // Gets the current time
+       Serial.print("Time ");
+       Serial.print(now.hour());
+       Serial.print(":");
+       Serial.println(now.minute());
+     }
   #endif
   
   
