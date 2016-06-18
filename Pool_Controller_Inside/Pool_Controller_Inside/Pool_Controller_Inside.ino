@@ -56,10 +56,10 @@ v1.70  07/08/15 - Fixed water fill alert so it only sends text if it's over 40 m
 v1.71  07/11/15 - Changed NTP to use Time_NTP.h library I made.  Added 30 minute delay to Water Level sensor trouble alert.  Added g_ prefix to global variables
 v1.72  07/15/15 - Fixed Xbee alert - it should go out after 10 minutes without xbee communication, but it was really set for 1 minute.
 v1.73  07/26/15 - Added adjustment for EST time
- 
+v1.74  06/14/16 - v1.73 was causing reboots, so I took the EST adjustment out. 
 */
 
-#define VERSION "v1.73"
+#define VERSION "v1.74"
 #define PRINT_DEBUG     // Comment out to turn off serial printing
 
 #include <Ethernet.h>        // Library for Arduino ethernet shield http://arduino.cc/en/Reference/Ethernet
@@ -245,8 +245,7 @@ void setup(void)
   }
   
   // Setup NTP time
-  const uint32_t EST_TIME_ADJUST = -14400000;
-  setSyncProvider(getNewNtpTime + EST_TIME_ADJUST);
+  setSyncProvider(getNewNtpTime);
   
   //  Print the time
   #ifdef PRINT_DEBUG
